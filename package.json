@@ -1,0 +1,24 @@
+{
+  "name": "giochi-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Junta Giochi System + Giochi app numa imagem de cartão e publica o site de download.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/run-all.mjs",
+    "apps": "node scripts/assemble.mjs apps",
+    "package": "node scripts/assemble.mjs package",
+    "site": "node scripts/build-site.mjs"
+  },
+  "keywords": [
+    "giochi",
+    "imagem",
+    "sdcard",
+    "release",
+    "site"
+  ]
+}

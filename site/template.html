@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Giochi OS — baixar</title>
+<meta name="description" content="Imagens do Giochi OS para cada aparelho suportado. Sistema Linux limpo, apps instaláveis pela loja.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <span class="mark" aria-hidden="true"></span>
+      <span>Giochi OS</span>
+    </a>
+    <nav>
+      <a href="#downloads">Baixar</a>
+      <a href="#gravar">Gravar</a>
+      <a href="#sobre">Sobre</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Console portátil · ARM64</p>
+      <h1>O sistema, e os apps, no mesmo lugar.</h1>
+      <p class="lede">
+        O Giochi OS é a base Linux limpa construída com Buildroot, entregue como
+        imagem pronta para o cartão. Os apps vivem fora da imagem: você instala
+        pela loja, na partição gravável, e pode substituí-los quando quiser.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#downloads">Ver imagens</a>
+        <a class="btn btn-ghost" href="#sobre">Como é feito</a>
+      </div>
+      <p class="muted small">
+        <!--COUNT--> release(s) publicada(s) · gerado em <!--GENERATED-->
+      </p>
+    </div>
+  </section>
+
+  <section id="downloads" class="section">
+    <div class="wrap">
+      <h2 class="h2">Imagens por aparelho</h2>
+      <p class="muted">
+        Cada imagem é específica do hardware: kernel, device tree, driver de
+        painel e layout de partição são do aparelho, não genéricos.
+      </p>
+
+      <div class="grid">
+<!--RELEASES-->
+      </div>
+    </div>
+  </section>
+
+  <section id="gravar" class="section section-alt">
+    <div class="wrap">
+      <h2 class="h2">Gravar no cartão</h2>
+      <div class="steps">
+        <div class="step">
+          <span class="num">1</span>
+          <h3>Confira o checksum</h3>
+          <pre><code>sha256sum -c SHA256SUMS</code></pre>
+          <p class="muted">Se não conferir, o arquivo veio corrompido. Baixe de novo.</p>
+        </div>
+        <div class="step">
+          <span class="num">2</span>
+          <h3>Descubra o dispositivo</h3>
+          <pre><code>lsblk</code></pre>
+          <p class="muted">O cartão costuma ser <code>/dev/sdX</code> ou <code>/dev/mmcblkX</code>. Confira o tamanho.</p>
+        </div>
+        <div class="step">
+          <span class="num">3</span>
+          <h3>Grave</h3>
+          <pre><code>sudo dd if=giochi-*.img of=/dev/sdX \
+  bs=4M conv=fsync status=progress</code></pre>
+          <p class="muted"><strong>O cartão será apagado por completo.</strong> <code>conv=fsync</code> não é opcional — sem ele a gravação pode ser truncada.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sobre" class="section">
+    <div class="wrap">
+      <h2 class="h2">Como é feito</h2>
+      <div class="cols">
+        <div>
+          <h3>Giochi System</h3>
+          <p class="muted">
+            Monta o Linux limpo com Buildroot: kernel, rootfs, boot, drivers e
+            painel de cada aparelho. Nada de interface aqui.
+          </p>
+        </div>
+        <div>
+          <h3>Giochi app</h3>
+          <p class="muted">
+            Os apps e jogos, cada um com seu manifesto de requisitos. O sistema
+            compara o manifesto com o perfil do aparelho antes de instalar.
+          </p>
+        </div>
+        <div>
+          <h3>Giochi os</h3>
+          <p class="muted">
+            Junta os dois: embute os apps de imagem no rootfs e publica a imagem
+            final com checksum. É este site.
+          </p>
+        </div>
+      </div>
+
+      <div class="note">
+        <h3>Por que apps ficam fora da imagem</h3>
+        <p class="muted">
+          A raiz é assinada e imutável. Apps instalados em <code>/user</code> podem
+          ser substituídos pelo usuário — inclusive por uma versão modificada, que
+          é o que a GPL exige de software GPL. Por isso a loja fica no computador e
+          envia o pacote pronto, em vez de embutir tudo na imagem.
+        </p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <p class="muted small">
+      Giochi OS · sistema sob licença MIT · apps próprios sob licença proprietária
+    </p>
+    <p class="muted small">
+      Software livre, sem garantia. Gravar imagem apaga o cartão — verifique o
+      dispositivo antes.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

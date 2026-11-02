@@ -1,0 +1,23 @@
+# Saída de release e site gerado
+dist/
+site/dist/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*~
+
+# Imagens: são artefatos grandes, publicados no site ou em release, nunca no Git
+*.img
+*.iso
+*.sdcard
