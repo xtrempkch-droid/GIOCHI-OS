@@ -444,3 +444,36 @@ test("fase package avisa quando só existe imagem crua", async () => {
     );
   });
 });
+
+test("todo asset referenciado pelo site é publicado", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "dev");
+    makeSystemOutput(systemDir);
+    const distDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir: distDir, version: "1.0.0" });
+
+    const outDir = path.join(dir, "site");
+    const result = generateSite({
+      distDir,
+      outDir,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    // O site referencia logo, marca e favicon. Se `generateSite` copiar só o
+    // CSS, a imagem quebra em produção e o build continua verde — que é
+    // exatamente o tipo de falha silenciosa que este teste fecha.
+    const html = readFileSync(result.indexPath, "utf8");
+    const referencias = [...html.matchAll(/(?:src|href)="(assets\/[^"]+)"/g)].map((m) => m[1]);
+    assert.ok(referencias.length > 0, "o template não referencia nenhum asset");
+
+    for (const ref of new Set(referencias)) {
+      assert.equal(
+        isFile(path.join(outDir, ref)),
+        true,
+        `asset referenciado mas não publicado: ${ref}`,
+      );
+    }
+  });
+});

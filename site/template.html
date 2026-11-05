@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Giochi OS — baixar</title>
 <meta name="description" content="Imagens do Giochi OS para cada aparelho suportado. Sistema Linux limpo, apps instaláveis pela loja.">
+<link rel="icon" href="assets/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="assets/logo-mark.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Giochi OS — baixar">
+<meta property="og:description" content="Imagem pronta para o cartão, por aparelho. O sistema é Linux limpo; os apps vivem fora da imagem.">
+<meta property="og:image" content="assets/logo.jpg">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -12,7 +19,7 @@
 <header class="top">
   <div class="wrap">
     <a class="brand" href="#top">
-      <span class="mark" aria-hidden="true"></span>
+      <img class="mark" src="assets/logo-mark.png" alt="" width="28" height="28" decoding="async">
       <span>Giochi OS</span>
     </a>
     <nav>
@@ -26,21 +33,37 @@
 <main id="top">
 
   <section class="hero">
-    <div class="wrap">
-      <p class="eyebrow">Console portátil · ARM64</p>
-      <h1>O sistema, e os apps, no mesmo lugar.</h1>
-      <p class="lede">
-        O Giochi OS é a base Linux limpa construída com Buildroot, entregue como
-        imagem pronta para o cartão. Os apps vivem fora da imagem: você instala
-        pela loja, na partição gravável, e pode substituí-los quando quiser.
-      </p>
-      <div class="cta">
-        <a class="btn btn-primary" href="#downloads">Ver imagens</a>
-        <a class="btn btn-ghost" href="#sobre">Como é feito</a>
+    <div class="wrap hero-grid">
+      <div class="hero-text">
+        <p class="eyebrow">Console portátil · ARM64</p>
+        <h1>O sistema, e os apps, no mesmo lugar.</h1>
+        <p class="lede">
+          O Giochi OS é a base Linux limpa construída com Buildroot, entregue como
+          imagem pronta para o cartão. Os apps vivem fora da imagem: você instala
+          pela loja, na partição gravável, e pode substituí-los quando quiser.
+        </p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#downloads">Ver imagens</a>
+          <a class="btn btn-ghost" href="#sobre">Como é feito</a>
+        </div>
+        <p class="muted small">
+          <!--COUNT--> release(s) publicada(s) · gerado em <!--GENERATED-->
+        </p>
       </div>
-      <p class="muted small">
-        <!--COUNT--> release(s) publicada(s) · gerado em <!--GENERATED-->
-      </p>
+
+      <!--
+        O logo é a ilustração de origem (docs/logo.jpg), reduzida para 960px e
+        salva como JPEG: é imagem fotográfica, e em PNG passaria de 1 MB.
+        A animação é CSS sobre essa imagem — nada de GIF, que pesaria mais que a
+        página inteira. `prefers-reduced-motion` desliga tudo (ver style.css).
+      -->
+      <div class="hero-logo">
+        <div class="logo-stage">
+          <img src="assets/logo.jpg"
+               alt="Giochi OS: tabuleiro neon com X e O e um rastro de energia"
+               width="960" height="524" decoding="async">
+        </div>
+      </div>
     </div>
   </section>
 

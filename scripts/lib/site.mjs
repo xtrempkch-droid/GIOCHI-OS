@@ -6,7 +6,7 @@
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { humanSize, isDir, isFile, readJson, walk } from "./fs.mjs";
+import { humanSize, isDir, isFile, listDir, readJson, walk } from "./fs.mjs";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) =>
@@ -112,8 +112,17 @@ export function generateSite({
 
   mkdirSync(outDir, { recursive: true });
   mkdirSync(path.join(outDir, "assets"), { recursive: true });
+  // Copia a pasta `assets` inteira, não só o CSS: o site passou a ter logo
+  // (`logo.jpg`), marca do cabeçalho (`logo-mark.png`) e favicon. Copiar só o
+  // CSS deixa o site publicado com imagem quebrada — e o build fica verde.
   if (isFile(stylePath)) {
-    copyFileSync(stylePath, path.join(outDir, "assets", "style.css"));
+    const assetsDir = path.dirname(stylePath);
+    for (const name of listDir(assetsDir)) {
+      const origem = path.join(assetsDir, name);
+      if (isFile(origem)) {
+        copyFileSync(origem, path.join(outDir, "assets", name));
+      }
+    }
   }
 
   for (const release of releases) {
