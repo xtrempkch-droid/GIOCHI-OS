@@ -189,3 +189,40 @@ como cartão.
 - **Não roda `genimage`** — a montagem do cartão é do Giochi System.
 - **Não assina** a imagem — a chave é do Giochi System.
 - **Não hospeda** a loja — ela roda no PC do usuário.
+
+## Injeção no ext4 (`--inject-apps`)
+
+```bash
+node scripts/assemble.mjs package ... --inject-apps
+```
+
+A decisão deste repositório é clara: apps entram no rootfs **antes** do build.
+Ainda assim existe um caso em que isso não é possível — o CI do Giochi System
+constrói a imagem sem ver o catálogo do Giochi app, então ela chega pronta e sem
+os apps.
+
+`--inject-apps` fecha essa lacuna escrevendo o overlay dentro do `rootfs.ext4`
+com `debugfs -w`, **sem montar e sem root**. Ele é estreito de propósito:
+
+| Condição | Comportamento |
+| --- | --- |
+| imagem de cartão (MBR/partição) | recusa: `nao_ext4` |
+| falta biblioteca que um binário pede | recusa: `biblioteca_ausente` |
+| `debugfs` ausente | recusa: `debugfs_ausente` |
+| overlay já presente | avisa `apps_ja_presentes`, não reescreve |
+
+A checagem de biblioteca é o ponto. Ela lê as `DT_NEEDED` de cada binário do
+overlay (`readelf` com `LC_ALL=C`) e procura cada uma dentro da imagem. Sem
+isso, a primeira imagem do Giochi OS anunciou 6 apps e o console mostrou:
+
+```text
+giochi-launcher: error while loading shared libraries: libSDL2-2.0.so.0
+giochi-init: launcher saiu com 127 (queda 1 de 5 na janela de 60s)
+```
+
+Depois dela, `SDL2_image` e `SDL2_mixer` entraram no fragmento do `qemu-aarch64`
+— os dois jogos que dependem deles estavam a caminho do mesmo defeito.
+
+A imagem injetada **não** passou pelo `post-build` com esses arquivos: o aviso
+`apps_injetados` diz isso em toda execução. É o preço de fazer no lugar errado,
+e é por isso que o caminho normal continua sendo a fase 1 antes do build.

@@ -91,6 +91,7 @@ if (args.command === "package") {
     outDir: path.resolve(args.out),
     version: args.version && args.version !== true ? String(args.version) : undefined,
     compress: args.compress && args.compress !== true ? String(args.compress) : null,
+    injectApps: Boolean(args["inject-apps"]),
   });
   printIssues(result.errors, result.warnings);
 

@@ -261,3 +261,22 @@ gh release create v0.1.0 dist/* --title "Giochi OS 0.1.0" --notes-file dist/READ
 
 Imagem de cartão é artefato grande e é publicada no site ou em release — nunca no
 Git. O `.gitignore` cobre isso.
+
+## 7.2 Decisões (13/11/2026, segunda rodada)
+
+- **`--inject-apps` existe porque o CI não vê o catálogo.** O caminho normal
+  continua sendo a fase `apps` antes do build. A injeção escreve no `ext4` cru
+  com `debugfs -w` (sem root, sem montar) e é recusada em imagem de cartão.
+  Toda execução avisa `apps_injetados`: a imagem não passou pelo `post-build`
+  com esses arquivos.
+- **A injeção confere biblioteca antes de escrever.** Lê as `DT_NEEDED` de cada
+  binário e procura cada uma dentro da imagem. Foi essa checagem que pegou
+  `SDL2_image`/`SDL2_mixer` faltando — e o defeito anterior era exatamente
+  esse: manifesto anunciando 6 apps, launcher morrendo com `error while loading
+  shared libraries`.
+- **`readelf` precisa de `LC_ALL=C`.** Nesta máquina ele fala português
+  ("Biblioteca Compartilhada"); um regex preso ao inglês devolveria lista vazia
+  em silêncio e a checagem nunca dispararia.
+- **Buildroot fica em 2024.02 neste build.** Outra sessão subiu o
+  `buildroot.version` para 2025.02 no meio do trabalho; retomar com a versão
+  nova forçaria toolchain do zero. A release 0.1.0 foi construída em 2024.02.

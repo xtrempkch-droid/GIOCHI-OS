@@ -16,6 +16,7 @@ import zlib from "node:zlib";
 import { loadApps, pngSize } from "../scripts/lib/apps.mjs";
 import { isFile } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
+import { injectOverlay, readFromImage } from "../scripts/lib/inject.mjs";
 import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
 import { inspectSystemBuild, parseChecksums } from "../scripts/lib/system.mjs";
@@ -653,8 +654,18 @@ test("site de cartão não mostra bloco de QEMU", async () => {
 // ── o que está dentro do rootfs ──────────────────────────────
 
 function binaryAvailable(name) {
-  const result = spawnSync(name, ["-V"], { stdio: "ignore" });
-  return !result.error && result.status === 0;
+  // Cada ferramenta responde a uma flag diferente: `readelf --version`,
+  // `debugfs -V`, e o `mkfs.ext4` não tem flag de versão nenhuma (ele imprime o
+  // uso e sai com 0). Por isso o teste é "existe e responde", não "responde
+  // com --version" — foi assim que a checagem passou a pular sete testes em
+  // silêncio.
+  for (const flag of ["--version", "-V"]) {
+    const result = spawnSync(name, [flag], { stdio: "ignore" });
+    if (!result.error && result.status === 0) return true;
+  }
+  // Sem flag de versão: basta o binário existir.
+  const probe = spawnSync(name, [], { stdio: "ignore" });
+  return !probe.error;
 }
 
 /** ext4 de verdade, populado a partir de uma pasta, sem root. */
@@ -736,5 +747,135 @@ test("fase package não anuncia app que não está no rootfs", async (t) => {
     assert.equal(result.release.apps.embedded.length, 0);
     assert.equal(result.release.apps.imageVerified, true);
     assert.ok(result.warnings.some((warning) => warning.code === "overlay_ausente"));
+  });
+});
+
+// ── injeção de overlay no ext4 ───────────────────────────────
+
+test("injectOverlay escreve arquivos com bit de execução", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const image = path.join(dir, "blank.ext4");
+    const rootdir = path.join(dir, "rootdir");
+    write(path.join(rootdir, "etc/motd"), "oi\n");
+    const made = spawnSync("mkfs.ext4", ["-q", "-F", "-d", rootdir, image, "16384"]);
+    assert.equal(made.status, 0, String(made.stderr));
+
+    const overlayDir = path.join(dir, "overlay");
+    write(path.join(overlayDir, "opt/giochi/apps/index.json"), '{"schemaVersion":1,"apps":[]}');
+    write(path.join(overlayDir, "opt/giochi/apps/launcher/bin/giochi-launcher"), "#!/bin/sh\necho oi\n");
+
+    const result = injectOverlay({ imagePath: image, overlayDir });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.written, 2);
+
+    const index = readFromImage(image, "/opt/giochi/apps/index.json");
+    assert.match(String(index), /schemaVersion/);
+
+    const stat = spawnSync("debugfs", ["-R", "stat /opt/giochi/apps/launcher/bin/giochi-launcher", image], {
+      encoding: "utf8",
+    });
+    assert.match(stat.stdout, /Mode:\s+0?755/, "o binário tem de sair executável");
+  });
+});
+
+test("injectOverlay recusa quando falta biblioteca que o app pede", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("readelf")) {
+    return t.skip("mkfs.ext4/debugfs/readelf ausentes");
+  }
+  withTempDir((dir) => {
+    const image = path.join(dir, "vazia.ext4");
+    const rootdir = path.join(dir, "rootdir");
+    write(path.join(rootdir, "etc/motd"), "oi\n");
+    assert.equal(spawnSync("mkfs.ext4", ["-q", "-F", "-d", rootdir, image, "16384"]).status, 0);
+
+    // Cópia de um ELF de verdade, que pede libc: a imagem vazia não tem libc.
+    const overlayDir = path.join(dir, "overlay");
+    mkdirSync(path.join(overlayDir, "opt/giochi/apps/x/bin"), { recursive: true });
+    writeFileSync(path.join(overlayDir, "opt/giochi/apps/x/bin/x"), readFileSync("/bin/sh"));
+
+    const result = injectOverlay({ imagePath: image, overlayDir });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => error.code === "biblioteca_ausente"));
+  });
+});
+
+test("injectOverlay recusa imagem que não é ext4 cru", (t) => {
+  if (!binaryAvailable("debugfs")) return t.skip("debugfs ausente");
+  withTempDir((dir) => {
+    const image = path.join(dir, "cartao.img");
+    writeFileSync(image, Buffer.alloc(4096, 0)); // setor zero de MBR, sem ext4
+    const overlayDir = path.join(dir, "overlay");
+    write(path.join(overlayDir, "opt/x"), "x");
+
+    const result = injectOverlay({ imagePath: image, overlayDir });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => error.code === "nao_ext4"));
+  });
+});
+
+test("fase package injeta apps quando pedido e a imagem permite", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("readelf")) {
+    return t.skip("mkfs.ext4/debugfs/readelf ausentes");
+  }
+  return withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    const kernel = Buffer.from("kernel de teste");
+
+    // Imagem com o mínimo que o binário do app pede: o próprio `/bin/sh` do
+    // host, copiado, e as libs que ele referencia. Recortar isso à mão é
+    // frágil; o teste que importa aqui é o caminho feliz da injeção, então o
+    // app é um script — sem ELF, sem dependência.
+    const rootdir = path.join(dir, "rootdir");
+    write(path.join(rootdir, "etc/motd"), "sem apps\n");
+    const rootfs = path.join(systemDir, "rootfs.ext4");
+    mkdirSync(systemDir, { recursive: true });
+    assert.equal(
+      spawnSync("mkfs.ext4", ["-q", "-F", "-d", rootdir, rootfs, "32768"]).status,
+      0,
+    );
+    write(path.join(systemDir, "Image"), kernel);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({
+        id: "qemu-aarch64",
+        name: "QEMU",
+        arch: "arm64",
+        buildroot: "2024.02",
+        buildrootDefconfig: "qemu_aarch64_virt_defconfig",
+      }),
+    );
+    write(path.join(systemDir, "build-info.txt"), "buildroot=2024.02\n");
+    write(
+      path.join(systemDir, "SHA256SUMS"),
+      `${sha256(kernel)}  Image\n${sha256(readFileSync(rootfs))}  rootfs.ext4\n`,
+    );
+
+    const appsRoot = path.join(dir, "apps");
+    const app = makeApp(appsRoot, { id: "so-um" });
+    write(path.join(app.dir, "bin", "tool"), "#!/bin/sh\necho ok\n");
+    makeRegistry(appsRoot, [app]);
+
+    const result = await runPackagePhase({
+      systemDir,
+      appsRoot,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+      injectApps: true,
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.release.apps.embedded.length, 1);
+    assert.equal(result.release.apps.embedded[0].id, "so-um");
+    assert.equal(result.release.apps.imageVerified, true);
+
+    // O app está mesmo dentro do arquivo publicado, não só no manifesto.
+    const inside = readFromImage(
+      path.join(dir, "dist", result.release.system.image),
+      "/opt/giochi/apps/so-um/bin/tool",
+    );
+    assert.match(String(inside), /echo ok/);
   });
 });

@@ -2,12 +2,13 @@
 //
 // Separado do CLI para poder ser testado por import. Sob o sandbox, spawnar o
 // CLI falha com EPERM — e testar a função pura é melhor de qualquer forma.
-import { copyFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { loadApps } from "./apps.mjs";
 import { compressFile } from "./compress.mjs";
 import { humanSize, isFile, sha256File, sizeOf, walk } from "./fs.mjs";
+import { injectOverlay, verifyIndex } from "./inject.mjs";
 import { stripCompression } from "./names.mjs";
 import { decompressCommand, qemuBootConfig, renderQemuCommand } from "./qemu.mjs";
 import { readRootfsApps } from "./rootfs.mjs";
@@ -77,6 +78,27 @@ export async function runAppsPhase({ appsRoot, outDir }) {
 }
 
 /**
+ * Cruza o catálogo com o que foi lido de dentro da imagem.
+ *
+ * A versão publicada é a da IMAGEM, não a do catálogo: é o arquivo que o
+ * usuário vai rodar. Um app presente na imagem e ausente do catálogo não pode
+ * desaparecer do manifesto — ele é conteúdo do sistema.
+ */
+function reconcileEmbedded(catalogEmbedded, inImage) {
+  const versions = new Map(inImage.map((app) => [String(app.id), app]));
+  const embedded = catalogEmbedded
+    .filter((app) => versions.has(app.id))
+    .map((app) => ({ ...app, version: String(versions.get(app.id).version || app.version) }));
+
+  for (const [id, entry] of versions) {
+    if (!embedded.some((app) => app.id === id)) {
+      embedded.push({ id, version: String(entry.version || ""), license: "" });
+    }
+  }
+  return embedded;
+}
+
+/**
  * Fase 2 — empacota a saída do sistema numa release publicável.
  *
  * Roda **depois** do build. Confere checksums, copia a imagem com nome
@@ -90,7 +112,14 @@ export async function runAppsPhase({ appsRoot, outDir }) {
  *   QEMU entrega. O rootfs vira o disco e o kernel vai ao lado, com o comando
  *   pronto no `README.txt`.
  */
-export async function runPackagePhase({ systemDir, appsRoot, outDir, version, compress }) {
+export async function runPackagePhase({
+  systemDir,
+  appsRoot,
+  outDir,
+  version,
+  compress,
+  injectApps = false,
+}) {
   const errors = [];
   const warnings = [];
 
@@ -196,20 +225,13 @@ export async function runPackagePhase({ systemDir, appsRoot, outDir, version, co
 
   let embedded = catalogEmbedded;
   if (inImage) {
-    const versions = new Map(inImage.map((app) => [String(app.id), app]));
-    embedded = catalogEmbedded
-      .filter((app) => versions.has(app.id))
-      .map((app) => ({ ...app, version: String(versions.get(app.id).version || app.version) }));
-    // App que está na imagem mas não no catálogo não pode desaparecer do
-    // manifesto: ele é conteúdo do sistema.
-    for (const [id, entry] of versions) {
-      if (!embedded.some((app) => app.id === id)) {
-        embedded.push({ id, version: String(entry.version || ""), license: "" });
-      }
-    }
+    embedded = reconcileEmbedded(catalogEmbedded, inImage);
   } else if (!card) {
     embedded = [];
-    if (catalogEmbedded.length > 0) {
+    // Com `--inject-apps` a imagem ainda vai receber o overlay; avisar agora que
+    // "não vai anunciar" seria mentira, e o aviso é o único lugar onde alguém
+    // leria o contrário do que aconteceu.
+    if (catalogEmbedded.length > 0 && !injectApps) {
       warnings.push({
         code: "overlay_ausente",
         message:
@@ -232,6 +254,56 @@ export async function runPackagePhase({ systemDir, appsRoot, outDir, version, co
 
   const imageTarget = path.join(outDir, imageName);
   copyFileSync(source.path, imageTarget);
+
+  // Injeção opcional do overlay de apps.
+  //
+  // Só faz sentido no alvo virtual: ext4 cru, sem tabela de partição e sem
+  // assinatura. No cartão, a fase `apps` roda ANTES do build, por decisão —
+  // ver docs/juncao.md. Aqui é a ponte para quando a imagem chega pronta de
+  // outro lugar (o CI do Giochi System não tem o catálogo de apps).
+  if (injectApps && !card && appsRoot) {
+    const already = readRootfsApps(imageTarget);
+    if (already.ok && already.apps.length > 0) {
+      warnings.push({
+        code: "apps_ja_presentes",
+        message: `${imageName} já traz ${already.apps.length} app(s); a injeção não é necessária`,
+      });
+      imageVerified = true;
+      embedded = reconcileEmbedded(catalogEmbedded, already.apps);
+    } else {
+      const stagingBase = path.join(outDir, ".injeacao");
+      rmSync(stagingBase, { recursive: true, force: true });
+      const overlay = await runAppsPhase({ appsRoot, outDir: stagingBase });
+      if (!overlay.ok) {
+        errors.push(...overlay.errors);
+        return { ok: false, errors, warnings, release: null };
+      }
+
+      const injected = injectOverlay({ imagePath: imageTarget, overlayDir: overlay.overlayDir });
+      rmSync(stagingBase, { recursive: true, force: true });
+
+      if (!injected.ok) {
+        errors.push(...injected.errors);
+        return { ok: false, errors, warnings, release: null };
+      }
+
+      const check = verifyIndex(imageTarget);
+      if (!check.ok) {
+        errors.push({ code: "injecao_nao_verificou", message: check.reason });
+        return { ok: false, errors, warnings, release: null };
+      }
+
+      imageVerified = true;
+      embedded = reconcileEmbedded(catalogEmbedded, check.apps);
+      warnings.push({
+        code: "apps_injetados",
+        message:
+          `${injected.written} arquivo(s) de ${overlay.embedded.length} app(s) escritos em ${imageName} ` +
+          "depois do build — a imagem não passou pelo post-build com eles",
+      });
+    }
+  }
+
   const image = await finalizeArtifact({
     sourcePath: imageTarget,
     compress: wantsCompression ? compress : null,

@@ -71,6 +71,15 @@ jobs:
       - name: Testes
         run: node tests/run-all.mjs
 
+      - name: Dependências de inspeção da imagem
+        # `debugfs` (e2fsprogs) lê e escreve dentro do ext4 sem montar; `readelf`
+        # (binutils) lista as `DT_NEEDED` dos binários dos apps. O ubuntu-24.04
+        # já traz binutils; e2fsprogs e file vêm no passo explícito para o
+        # runner não depender do que a imagem base tem.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends e2fsprogs binutils file
+
       - name: Resolver versão
         id: version
         run: |
@@ -124,12 +133,18 @@ jobs:
 
       - name: Empacotar a release
         run: |
+          # `--inject-apps` fecha a lacuna que o CI tem por desenho: o build do
+          # GIOCHI-SYSTEM não vê o catálogo de apps, então a imagem chega sem
+          # eles. Num alvo virtual o rootfs é um ext4 cru, sem tabela de
+          # partição e sem assinatura — escrever nele é seguro, e o injetor
+          # recusa a imagem se faltar biblioteca que algum binário peça.
           node scripts/assemble.mjs package \
             --system .deps/system \
             --apps .deps/app/app \
             --out dist \
             --version "${{ steps.version.outputs.value }}" \
-            --compress xz
+            --compress xz \
+            --inject-apps
 
       - name: Gerar o site
         run: node scripts/build-site.mjs --dist dist
