@@ -30,6 +30,13 @@ export function qemuBootConfig({ device, arch, imageName, kernelName }) {
     memoryMiB: Number(device?.qemu?.memoryMiB) || 512,
     disk: stripCompression(String(imageName || "disco.img")),
     kernel: kernelName ? stripCompression(String(kernelName)) : null,
+    // Sem `virtio-gpu-pci`, e o motivo importa: o SDL2 desta imagem não compila
+    // o driver KMSDRM (mesa3d depende de C++ no toolchain — ver o fragmento do
+    // device). Anunciar o dispositivo daria `/dev/dri/card0` sem driver de
+    // vídeo, e o `giochi-init` escolheria `kmsdrm` para morrer cinco vezes.
+    // Quem ligar a pilha gráfica no device declara `qemu.gpu` no device.json.
+    gpu: device?.qemu?.gpu === false ? null : device?.qemu?.gpu || null,
+    display: device?.qemu?.display || null,
     cmdline: `root=/dev/vda rw console=${consoleName}`,
   };
 }
@@ -58,6 +65,12 @@ export function renderQemuCommand(boot) {
   lines.push(`  -append "${boot.cmdline}" \\`);
   lines.push("  -netdev user,id=net0 \\");
   lines.push("  -device virtio-net-device,netdev=net0 \\");
+  if (boot.gpu) {
+    lines.push(`  -device ${boot.gpu} \\`);
+  }
+  if (boot.display) {
+    lines.push(`  -display ${boot.display} \\`);
+  }
   lines.push("  -nographic");
   return lines.join("\n");
 }

@@ -128,7 +128,13 @@ function renderRunBlock(release) {
               : ""
           }
           <pre><code>${escapeHtml(renderQemuCommand(boot))}</code></pre>
-          <p class="muted">Login <code>root</code>. Para sair do console: <code>Ctrl+A</code>, depois <code>X</code>.</p>
+          <p class="muted">
+            Login <code>root</code>, senha <code>giochi-system</code>.
+            Para sair do console: <code>Ctrl+A</code>, depois <code>X</code>.
+            Esta imagem é headless: o console é a interface. Os apps estão em
+            <code>/opt/giochi/apps</code> — rode o launcher com
+            <code>SDL_VIDEODRIVER=dummy</code>.
+          </p>
         </details>`;
 }
 
