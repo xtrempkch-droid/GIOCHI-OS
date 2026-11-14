@@ -121,7 +121,7 @@ Detalhes em [docs/site.md](docs/site.md).
 ## Comandos
 
 ```bash
-node tests/run-all.mjs                              # 31 testes
+node tests/run-all.mjs                              # 35 testes
 node scripts/assemble.mjs apps --apps <app/> --out <staging>
 node scripts/assemble.mjs package --system <out/device> --apps <app/> --out dist \
   --version 0.1.0 --compress xz
@@ -144,6 +144,7 @@ Giochi os/
 │       ├── rootfs.mjs         # lê apps de dentro do ext4
 │       ├── qemu.mjs           # comando de boot do alvo virtual
 │       ├── names.mjs          # nome cru × nome comprimido
+│       ├── inject.mjs         # escreve overlay no ext4 sem montar
 │       └── fs.mjs             # hash, JSON, listagem
 ├── site/
 │   ├── template.html
@@ -154,7 +155,7 @@ Giochi os/
 
 ## Estado
 
-O que está **verificado**: 31 testes passando — junção, verificação de checksum,
+O que está **verificado**: 35 testes passando — junção, verificação de checksum,
 regra de licença, geração do site com links corretos, publicação de alvo virtual
 (disco + kernel), compressão e leitura do `index.json` de dentro do `rootfs.ext4`.
 

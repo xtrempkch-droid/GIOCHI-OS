@@ -39,13 +39,13 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
   `compress`, `rootfs`, `qemu` e `names`.
 - `site/template.html` + `site/assets/style.css`, com card próprio para alvo
   virtual (bloco "Como iniciar no QEMU" e download do kernel).
-- 31 testes em `tests/pipeline.test.mjs`.
+- 35 testes em `tests/pipeline.test.mjs`.
 - Workflows: `validate.yml` (testes) e `release.yml` (release + Pages).
 - Documentação em `docs/` (3 páginas).
 
 ### Validado nesta sessão
 
-- `node tests/run-all.mjs` passou: **31/31**.
+- `node tests/run-all.mjs` passou: **35/35**.
 - Fluxo completo com uma saída de sistema **virtual** (kernel `Image` +
   `rootfs.ext4`): a fase `package` publicou
   `giochi-qemu-aarch64-0.1.0.img.xz` + `giochi-qemu-aarch64-0.1.0-Image.xz`,
@@ -80,6 +80,7 @@ Giochi os/
 │       ├── site.mjs           # geração do HTML
 │       ├── compress.mjs       # xz/zstd com queda para gzip
 │       ├── rootfs.mjs         # lê apps de dentro do ext4 (debugfs)
+│       ├── inject.mjs         # escreve overlay no ext4 sem montar
 │       ├── qemu.mjs           # comando de boot do alvo virtual
 │       └── names.mjs          # nome cru × nome comprimido
 ├── site/
