@@ -255,6 +255,25 @@ gh release create v0.1.0 dist/* --title "Giochi OS 0.1.0" --notes-file dist/READ
 `dist/*` e publica `site/dist` no Pages. Dispara por tag `v*` ou por
 `workflow_dispatch`. Requer Pages configurado com "GitHub Actions" como origem.
 
+O workflow depende de um run **verde** do GIOCHI-SYSTEM: sem artefato ele para
+no passo "Resolver o build do sistema". Se o `workflow_dispatch` for usado, o
+input `system_run_id` permite apontar um run específico em vez do último.
+
+### Estado da publicação (13/11/2026)
+
+A release `v0.1.0` no GitHub foi criada pelo workflow e está com os artefatos
+de uma imagem **anterior** ao SDL2 (o run do GIOCHI-SYSTEM escolhido foi o
+`f8b914b`, o último verde naquele momento). O `dist/` desta máquina tem a
+imagem boa, verificada no QEMU, mas publicá-la exige refazer o workflow com um
+run do sistema que já contenha SDL2/SDL2_ttf/SDL2_image/SDL2_mixer.
+
+O que bloqueia o run novo: `device/devices.json` foi editado para habilitar
+`powkiddy-x55`, que continua `status: "draft"` no `device.json`. A regra em
+`scripts/lib/devices.mjs:188` exige `status: ready` para device habilitado, e a
+validação falha antes de qualquer compilação — derrubando **todos** os builds,
+inclusive o do qemu. Corrigir é decidir o que o X55 é: promover a `ready` (só
+com boot medido no aparelho) ou voltar `enabled` para `false`.
+
 ## 12. Arquivos que não devem ser commitados
 
 `dist/`, `site/dist/`, `node_modules/`, e imagens `*.img` / `*.iso` / `*.sdcard`
