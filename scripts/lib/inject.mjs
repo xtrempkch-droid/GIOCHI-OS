@@ -25,8 +25,12 @@
 // O manifesto anunciava 6 apps e o console mostrava laço de queda. Descobrir
 // isso no boot é tarde; descobrir na injeção custa uma linha.
 import { spawnSync } from "node:child_process";
-import { isFile, listDir, walk } from "./fs.mjs";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+
+import { isFile, walk } from "./fs.mjs";
+import { readRootfsApps } from "./rootfs.mjs";
 
 /** Caminho padrão do índice, o mesmo que o launcher lê. */
 const INDEX_PATH = "/opt/giochi/apps/index.json";
@@ -239,6 +243,85 @@ export function verifyIndex(imagePath) {
   } catch (error) {
     return { ok: false, reason: `${INDEX_PATH} inválido: ${error.message}` };
   }
+}
+
+/**
+ * Partições da imagem, quando ela tem tabela.
+ *
+ * O `debugfs` não aceita deslocamento: para ler o ext4 de um `.img` de cartão é
+ * preciso extrair a partição antes. `sfdisk -J` é o único jeito de obter os
+ * setores sem fazer parsing de MBR/GPT à mão — e GPT em particular tem cabeçalho
+ * variável demais para valer a pena reimplementar.
+ */
+export function listPartitions(imagePath) {
+  const result = spawnSync("sfdisk", ["-J", imagePath], { encoding: "utf8" });
+  if (result.error || result.status !== 0) return null;
+  try {
+    const table = JSON.parse(result.stdout).partitiontable;
+    return {
+      sectorSize: Number(table.sectorsize) || 512,
+      partitions: (table.partitions || []).map((part) => ({
+        start: Number(part.start),
+        size: Number(part.size),
+        type: String(part.type || ""),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lê `/opt/giochi/apps/index.json` de uma imagem com tabela de partição.
+ *
+ * Extrai a maior partição Linux para um arquivo temporário com `dd` e roda o
+ * `debugfs` nela. É leitura, não escrita: nenhuma etapa altera a imagem
+ * original. Custa I/O do tamanho do rootfs — e é o preço de dizer a verdade no
+ * manifesto em vez de repetir o catálogo.
+ */
+export function readAppsFromCardImage(imagePath, { tempDir } = {}) {
+  const table = listPartitions(imagePath);
+  if (!table) return { ok: false, inspected: false, reason: "tabela de partição ilegível" };
+
+  // Tipos Linux: 83 (MBR/ext4) e o GUID de "Linux filesystem" no GPT.
+  const isLinux = (part) =>
+    part.type === "83" || /^0fc63daf-8483-4772-8e79-3d69d8477de4$/i.test(part.type);
+  const linux = table.partitions.filter(isLinux);
+  const candidates = linux.length > 0 ? linux : table.partitions;
+  const target = candidates.length > 0 ? candidates.reduce((a, b) => (b.size > a.size ? b : a)) : null;
+  if (!target) return { ok: false, inspected: false, reason: "nenhuma partição na tabela" };
+
+  const created = !tempDir;
+  const dir = tempDir || mkdtempSync(path.join(os.tmpdir(), "giochi-part-"));
+  const partitionFile = path.join(dir, "particao.img");
+
+  // `dd` em vez de `fs.readFileSync`: 1 GiB de rootfs em buffer de JS é memória
+  // gasta sem motivo, e o `dd` copia por faixa sem montar nada.
+  const copy = spawnSync(
+    "dd",
+    [
+      `if=${imagePath}`,
+      `of=${partitionFile}`,
+      `bs=${table.sectorSize}`,
+      `skip=${target.start}`,
+      `count=${target.size}`,
+      "status=none",
+    ],
+    { encoding: "utf8" },
+  );
+
+  if (copy.error || copy.status !== 0) {
+    if (created) rmSync(dir, { recursive: true, force: true });
+    return {
+      ok: false,
+      inspected: false,
+      reason: `extração da partição falhou: ${(copy.stderr || copy.error || "").toString().trim()}`,
+    };
+  }
+
+  const read = readRootfsApps(partitionFile);
+  if (created) rmSync(dir, { recursive: true, force: true });
+  return read;
 }
 
 export { INDEX_PATH };

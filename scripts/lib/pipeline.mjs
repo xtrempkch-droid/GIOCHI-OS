@@ -8,7 +8,7 @@ import path from "node:path";
 import { loadApps } from "./apps.mjs";
 import { compressFile } from "./compress.mjs";
 import { humanSize, isFile, sha256File, sizeOf, walk } from "./fs.mjs";
-import { injectOverlay, verifyIndex } from "./inject.mjs";
+import { injectOverlay, readAppsFromCardImage, verifyIndex } from "./inject.mjs";
 import { stripCompression } from "./names.mjs";
 import { decompressCommand, qemuBootConfig, renderQemuCommand } from "./qemu.mjs";
 import { readRootfsApps } from "./rootfs.mjs";
@@ -210,8 +210,18 @@ export async function runPackagePhase({
   let inImage = null;
   let inImageReason = null;
   let imageVerified = false;
+  // Nome do artefato que foi inspecionado, para a mensagem de aviso.
+  const readTarget = card ? card.name : system.rootfs?.name || "a imagem";
   if (!card && system.rootfs) {
     const read = readRootfsApps(system.rootfs.path);
+    imageVerified = Boolean(read.inspected);
+    if (read.ok) inImage = read.apps;
+    else inImageReason = read.reason;
+  } else if (card && !card.compressed) {
+    // Cartão: o ext4 está atrás da tabela de partição, então o debugfs não abre
+    // direto. A partição é extraída e conferida — 8 s num rootfs de 1 GiB, e o
+    // preço de não anunciar app que a imagem não tem.
+    const read = readAppsFromCardImage(card.path);
     imageVerified = Boolean(read.inspected);
     if (read.ok) inImage = read.apps;
     else inImageReason = read.reason;
@@ -226,20 +236,30 @@ export async function runPackagePhase({
   let embedded = catalogEmbedded;
   if (inImage) {
     embedded = reconcileEmbedded(catalogEmbedded, inImage);
-  } else if (!card) {
+  } else if (!card || imageVerified) {
+    // Imagem conferida e sem apps: o manifesto publica a verdade, não o
+    // catálogo. Vale para o alvo virtual e para o cartão.
     embedded = [];
-    // Com `--inject-apps` a imagem ainda vai receber o overlay; avisar agora que
-    // "não vai anunciar" seria mentira, e o aviso é o único lugar onde alguém
-    // leria o contrário do que aconteceu.
     if (catalogEmbedded.length > 0 && !injectApps) {
       warnings.push({
         code: "overlay_ausente",
         message:
-          `o catálogo tem ${catalogEmbedded.length} app(s) para a imagem, mas o rootfs não traz ` +
-          `/opt/giochi/apps/index.json (${inImageReason || "motivo desconhecido"}); ` +
+          `o catálogo tem ${catalogEmbedded.length} app(s) para a imagem, mas ` +
+          `${readTarget} não traz /opt/giochi/apps/index.json ` +
+          `(${inImageReason || "motivo desconhecido"}); ` +
           "a release não vai anunciá-los como embutidos",
       });
     }
+  } else if (catalogEmbedded.length > 0) {
+    // Não deu para inspecionar (sem debugfs/sfdisk, ou imagem comprimida na
+    // origem). Aqui o catálogo é a única informação disponível — e por isso a
+    // release marca `imageVerified: false`.
+    warnings.push({
+      code: "apps_nao_verificados",
+      message:
+        `${catalogEmbedded.length} app(s) do catálogo anunciados sem conferir a imagem ` +
+        `(${inImageReason || "inspeção indisponível"}); apps.imageVerified=false`,
+    });
   }
 
   mkdirSync(outDir, { recursive: true });

@@ -226,3 +226,23 @@ Depois dela, `SDL2_image` e `SDL2_mixer` entraram no fragmento do `qemu-aarch64`
 A imagem injetada **não** passou pelo `post-build` com esses arquivos: o aviso
 `apps_injetados` diz isso em toda execução. É o preço de fazer no lugar errado,
 e é por isso que o caminho normal continua sendo a fase 1 antes do build.
+
+## A conferência vale para cartão também
+
+`apps.imageVerified` não é exclusivo do alvo virtual. Num `.img` de cartão o
+ext4 fica **atrás da tabela de partição**, então o `debugfs` não abre direto:
+
+1. `sfdisk -J` lê a tabela;
+2. a maior partição Linux é extraída com `dd` para um temporário;
+3. o `debugfs` lê o `index.json` dessa partição;
+4. o temporário é apagado.
+
+Custa ~8 s num rootfs de 1 GiB, e é leitura — a imagem original não é tocada.
+O que se ganha: a release deixa de repetir o catálogo. Medido no X55 em
+13/11/2026, uma imagem de cartão construída sem o overlay saía anunciando 6
+apps e a imagem tinha zero; agora ela publica `apps.embedded: []`, avisa
+`overlay_ausente` e o site mostra "0 app(s) na imagem".
+
+Quando nem o `debugfs` nem o `sfdisk` existem, o catálogo é a única informação
+disponível: a release o usa, marca `apps.imageVerified: false` e avisa
+`apps_nao_verificados`.

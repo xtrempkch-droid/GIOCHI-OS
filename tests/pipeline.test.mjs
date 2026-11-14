@@ -16,7 +16,7 @@ import zlib from "node:zlib";
 import { loadApps, pngSize } from "../scripts/lib/apps.mjs";
 import { isFile } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
-import { injectOverlay, readFromImage } from "../scripts/lib/inject.mjs";
+import { injectOverlay, readAppsFromCardImage, readFromImage } from "../scripts/lib/inject.mjs";
 import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
 import { inspectSystemBuild, parseChecksums } from "../scripts/lib/system.mjs";
@@ -877,5 +877,102 @@ test("fase package injeta apps quando pedido e a imagem permite", (t) => {
       "/opt/giochi/apps/so-um/bin/tool",
     );
     assert.match(String(inside), /echo ok/);
+  });
+});
+
+// ── leitura do ext4 dentro de imagem particionada ────────────
+
+/** Imagem de cartão mínima: tabela MBR + uma partição ext4 com conteúdo. */
+function makeCardImage(dir, rootContent) {
+  const rootdir = path.join(dir, "rootdir");
+  for (const [relative, content] of Object.entries(rootContent)) {
+    write(path.join(rootdir, relative), content);
+  }
+  const partition = path.join(dir, "particao.img");
+  assert.equal(
+    spawnSync("mkfs.ext4", ["-q", "-F", "-b", "1024", "-d", rootdir, partition, "8192"]).status,
+    0,
+  );
+
+  const image = path.join(dir, "cartao.img");
+  // 1 MiB de folga + partição de 8 MiB: 18 MiB no total.
+  assert.equal(spawnSync("truncate", ["-s", "18M", image]).status, 0);
+  const table = spawnSync(
+    "sfdisk",
+    [image],
+    { input: "label: dos\nstart=2048, size=16384, type=83\n", encoding: "utf8" },
+  );
+  assert.equal(table.status, 0, table.stderr);
+
+  const copy = spawnSync("dd", [
+    `if=${partition}`,
+    `of=${image}`,
+    "bs=512",
+    "seek=2048",
+    "conv=notrunc",
+    "status=none",
+  ]);
+  assert.equal(copy.status, 0);
+  return image;
+}
+
+test("readAppsFromCardImage lê o índice atrás da tabela de partição", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("sfdisk")) {
+    return t.skip("mkfs.ext4/debugfs/sfdisk ausentes");
+  }
+  withTempDir((dir) => {
+    const index = { schemaVersion: 1, apps: [{ id: "launcher", version: "0.1.0" }] };
+    const image = makeCardImage(dir, { "opt/giochi/apps/index.json": JSON.stringify(index) });
+
+    const result = readAppsFromCardImage(image);
+    assert.equal(result.ok, true, result.reason);
+    assert.equal(result.inspected, true);
+    assert.deepEqual(result.apps, index.apps);
+  });
+});
+
+test("readAppsFromCardImage não inventa app quando o overlay não entrou", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("sfdisk")) {
+    return t.skip("mkfs.ext4/debugfs/sfdisk ausentes");
+  }
+  withTempDir((dir) => {
+    const image = makeCardImage(dir, { "etc/motd": "sem overlay\n" });
+    const result = readAppsFromCardImage(image);
+    assert.equal(result.ok, false);
+    assert.equal(result.inspected, true);
+    assert.ok(result.reason);
+  });
+});
+
+test("fase package não anuncia app do catálogo em cartão sem overlay", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("sfdisk")) {
+    return t.skip("mkfs.ext4/debugfs/sfdisk ausentes");
+  }
+  return withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "r35s");
+    const image = makeCardImage(systemDir, { "etc/motd": "sem overlay\n" });
+    const bytes = readFileSync(image);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "r35s", name: "R35S", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(path.join(systemDir, "build-info.txt"), "buildroot=2024.02\n");
+    write(path.join(systemDir, "SHA256SUMS"), `${sha256(bytes)}  cartao.img\n`);
+
+    const appsRoot = path.join(dir, "apps");
+    makeRegistry(appsRoot, [makeApp(appsRoot, { id: "launcher" })]);
+
+    const result = await runPackagePhase({
+      systemDir,
+      appsRoot,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    // O catálogo tem 1 app; a imagem não tem nenhum. O manifesto diz zero.
+    assert.equal(result.release.apps.embedded.length, 0);
+    assert.equal(result.release.apps.imageVerified, true);
+    assert.ok(result.warnings.some((warning) => warning.code === "overlay_ausente"));
   });
 });
