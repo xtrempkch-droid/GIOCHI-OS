@@ -2,6 +2,9 @@
 dist/
 site/dist/
 
+# Overlay da fase `apps` (artefato intermediário, gerado a partir do Giochi app)
+staging/
+
 # Node
 node_modules/
 npm-debug.log*
@@ -21,3 +24,10 @@ desktop.ini
 *.img
 *.iso
 *.sdcard
+*.img.xz
+*.img.gz
+*.img.zst
+*.iso.xz
+*.iso.gz
+*.sdcard.xz
+*.sdcard.gz

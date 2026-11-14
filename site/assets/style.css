@@ -152,11 +152,27 @@ details summary:hover{color:var(--text)}
 .card footer{
   display:flex;align-items:center;justify-content:space-between;gap:10px;
   margin-top:auto;padding-top:14px;border-top:1px solid var(--line);
-  font-size:11px;
+  font-size:11px;flex-wrap:wrap;
 }
+.card footer .btn{font-size:12px;min-height:36px;padding:0 14px}
 .card footer .mono{
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--faint);
+  color:var(--faint);flex:1 1 100%;
+}
+
+/* alvo virtual (QEMU): o card ganha um bloco de comando próprio */
+.card-vm{border-color:rgba(102,192,244,0.3)}
+.card-vm .badge{
+  background:rgba(139,92,246,0.16);color:#c4b5fd;
+  border-color:rgba(139,92,246,0.35);
+}
+details.run{display:block}
+details.run > summary{color:var(--accent);font-weight:600}
+details.run pre{margin-top:8px;font-size:11px}
+details.run p{margin-top:8px;font-size:12px}
+details.run p code{
+  background:rgba(0,0,0,0.4);padding:2px 5px;border-radius:4px;
+  font-size:11px;color:var(--accent);
 }
 
 /* ── passos ───────────────────────────── */

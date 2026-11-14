@@ -90,6 +90,7 @@ if (args.command === "package") {
     appsRoot: args.apps ? path.resolve(args.apps) : null,
     outDir: path.resolve(args.out),
     version: args.version && args.version !== true ? String(args.version) : undefined,
+    compress: args.compress && args.compress !== true ? String(args.compress) : null,
   });
   printIssues(result.errors, result.warnings);
 
@@ -100,8 +101,12 @@ if (args.command === "package") {
 
   const release = result.release;
   console.log(`  + ${release.system.image} (${release.system.sizeHuman})`);
+  if (release.system.kernel) {
+    console.log(`  + ${release.system.kernel.name} (${release.system.kernel.sizeHuman})`);
+  }
   console.log();
   console.log(`Release pronta em ${path.resolve(args.out)}`);
+  console.log(`  tipo: ${release.system.kind === "virtual" ? "máquina virtual" : "cartão SD"}`);
   console.log(`  sha256: ${release.system.imageSha256}`);
   console.log(`  apps na imagem: ${release.apps.embedded.length}`);
   console.log(`  apps de loja:   ${release.apps.store.length}`);

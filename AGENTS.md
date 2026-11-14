@@ -26,37 +26,44 @@ o caminho entra por argumento e o único acoplamento é o contrato em JSON.
 C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi os
 ```
 
-Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS` (a criar).
+Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
 
 ## 3. Estado atual
 
 ### Concluído
 
 - Estrutura de repositório pronta para GitHub.
-- `scripts/assemble.mjs` com as duas fases (`apps`, `package`).
+- `scripts/assemble.mjs` com as duas fases (`apps`, `package`) e `--compress`.
 - `scripts/build-site.mjs` gerando site autocontido.
-- `scripts/lib/` com 5 módulos: `fs`, `system`, `apps`, `pipeline`, `site`.
-- `site/template.html` + `site/assets/style.css`.
-- 20 testes em `tests/pipeline.test.mjs`.
-- Workflow de validação.
+- `scripts/lib/` com os módulos `fs`, `system`, `apps`, `pipeline`, `site`,
+  `compress`, `rootfs`, `qemu` e `names`.
+- `site/template.html` + `site/assets/style.css`, com card próprio para alvo
+  virtual (bloco "Como iniciar no QEMU" e download do kernel).
+- 31 testes em `tests/pipeline.test.mjs`.
+- Workflows: `validate.yml` (testes) e `release.yml` (release + Pages).
 - Documentação em `docs/` (3 páginas).
 
 ### Validado nesta sessão
 
-- `node tests/run-all.mjs` passou: **20/20**.
-- Site gerado de verdade a partir de uma release de demonstração:
-  `site/dist/index.html` contém o card, o link `downloads/<device>/<img>` e o CSS;
-  todos os `href` são relativos e existem.
-- Rodei o fluxo completo (fase `package` → `build-site`) com uma imagem de
-  demonstração e conferi o HTML produzido.
+- `node tests/run-all.mjs` passou: **31/31**.
+- Fluxo completo com uma saída de sistema **virtual** (kernel `Image` +
+  `rootfs.ext4`): a fase `package` publicou
+  `giochi-qemu-aarch64-0.1.0.img.xz` + `giochi-qemu-aarch64-0.1.0-Image.xz`,
+  `SHA256SUMS` com as duas linhas e `README.txt` com o comando do QEMU.
+- O site gerado contém o card `card-vm`, o link do kernel copiado para
+  `downloads/qemu-aarch64/` e o bloco "Como iniciar no QEMU".
+- `readRootfsApps` foi exercitado contra um ext4 de verdade (criado com
+  `mkfs.ext4 -d`, sem root): lê o `index.json` quando existe e devolve
+  `ok: false` quando o overlay ficou de fora.
 
 ### Não executado / pendente
 
-- **Nenhuma execução com imagem real** do Giochi System — o build nunca rodou.
-- **Nenhuma fase `apps` com app pronto**: todos os apps do Giochi app estão em
-  `scaffold`, então a fase `apps` hoje só produz overlay vazio (com aviso).
-- **Sem repositório Git.** `git` não está instalado neste ambiente.
-- **Sem CI real.** O workflow está escrito, nunca rodou.
+- **Nenhum build real de device de hardware** neste repositório — só o artefato
+  baixado do GIOCHI-SYSTEM.
+- **Nenhuma fase `apps` com app pronto para a imagem**: os apps de imagem do
+  Giochi app ainda não têm `bin/` exportado, então o overlay sai vazio.
+- **Sem CI real** para o `release.yml`: o workflow está escrito e validado como
+  YAML, mas nunca rodou.
 
 ## 4. Estrutura
 
@@ -70,7 +77,11 @@ Giochi os/
 │       ├── system.mjs         # lê e verifica out/<device>/
 │       ├── apps.mjs           # lê e classifica o catálogo
 │       ├── pipeline.mjs       # as duas fases, sem console nem exit
-│       └── site.mjs           # geração do HTML
+│       ├── site.mjs           # geração do HTML
+│       ├── compress.mjs       # xz/zstd com queda para gzip
+│       ├── rootfs.mjs         # lê apps de dentro do ext4 (debugfs)
+│       ├── qemu.mjs           # comando de boot do alvo virtual
+│       └── names.mjs          # nome cru × nome comprimido
 ├── site/
 │   ├── template.html
 │   └── assets/style.css
@@ -97,12 +108,17 @@ Campos usados aqui: `id`, `folder`, `status`, `distribution`. A licença vem do
 
 ### Entrada — `Giochi System/out/<device>/`
 
-Exige `device.json`, `build-info.txt`, `SHA256SUMS` e ao menos uma imagem
-(`.img`/`.iso`). O `SHA256SUMS` é verificado arquivo por arquivo.
+Exige `device.json`, `build-info.txt`, `SHA256SUMS` e **um** dos dois:
+
+- uma imagem de cartão (`.img`/`.iso`/`.sdcard`, comprimida ou não); ou
+- kernel (`Image`, `bzImage`, `zImage`, `uImage`) **e** `rootfs.ext[234]` — o
+  que o Buildroot entrega para alvo virtual, onde não existe `genimage`.
+
+O `SHA256SUMS` é verificado arquivo por arquivo.
 
 ### Saída — `dist/release.json`
 
-Manifesto consumido pelo site. Formato completo em
+Manifesto `schemaVersion: 2`, consumido pelo site. Formato completo em
 [docs/juncao.md](docs/juncao.md).
 
 ## 6. Comandos
@@ -115,7 +131,7 @@ node scripts/assemble.mjs apps \
 
 node scripts/assemble.mjs package \
   --system ../"Giochi System"/out/qemu-aarch64 \
-  --apps ../"Giochi app"/app --out dist --version 0.1.0
+  --apps ../"Giochi app"/app --out dist --version 0.1.0 --compress xz
 
 node scripts/build-site.mjs --dist dist
 ```
@@ -142,59 +158,106 @@ Não use `node --test tests/`: spawna um processo por arquivo e falha com
 - **Links relativos.** Permite publicar em qualquer caminho — raiz, subpasta,
   GitHub Pages — sem configuração.
 
+## 7.1 Decisões (13/11/2026)
+
+- **Alvo virtual publica disco + kernel, não um "cartão".** O Buildroot não roda
+  `genimage` no `qemu-aarch64`: entrega `Image` e `rootfs.ext4`. Renomear o
+  `rootfs.ext4` para `.img` é honesto — é um disco cru que o QEMU abre com
+  `-drive` — mas chamá-lo de cartão SD seria mentira: gravar num cartão não
+  produz aparelho que inicializa. O `release.json` carrega `kind: "virtual"` e o
+  site mostra o comando do QEMU em vez do `dd`.
+- **Kernel é download separado.** Sem ele o disco não inicia. Publicar só o
+  `.img` daria um botão que baixa um arquivo inútil sozinho.
+- **`release.json` sobe para `schemaVersion: 2`.** Campos novos: `system.kind`,
+  `system.kernel`, `system.artifacts[]`, `boot` e `apps.imageVerified`. O site é
+  tolerante: release sem esses campos continua renderizando como cartão.
+- **Compressão é opcional e explícita (`--compress`).** O padrão continua
+  publicar o que veio do build; quando ligada, o `.img` cru **não** fica ao lado
+  do comprimido — dois arquivos com o mesmo conteúdo dobram o download e
+  convidam a baixar o errado. Se `xz`/`zstd` não existirem na máquina, cai para
+  `gz` do `node:zlib` e o nome publicado diz `gz`, não `xz`.
+- **"Apps na imagem" é lido de dentro da imagem.** `debugfs` lê
+  `/opt/giochi/apps/index.json` do `rootfs.ext4` sem root. Se o overlay ficou de
+  fora do build, a release **não** anuncia os apps do catálogo — avisa
+  `overlay_ausente` e publica a verdade. Era o defeito mais fácil de passar
+  despercebido: manifesto bonito, aparelho sem app.
+
 ## 8. O que este repositório não faz
 
 - **Não compila** nada. Se aparecer lógica de build aqui, está no lugar errado.
-- **Não roda `genimage`** — a montagem do cartão é do Giochi System.
+- **Não roda `genimage`** — a montagem do cartão é do Giochi System. No alvo
+  virtual não há cartão para montar: o `rootfs.ext4` do build **é** o disco.
 - **Não assina** a imagem — a chave é do Giochi System.
 - **Não hospeda a loja** — ela roda no PC do usuário (ver Giochi app).
 
 ## 9. Ambiente desta sessão
 
-Windows, sem toolchain de desenvolvimento. O que está disponível e o que não:
+Linux, com Docker, Buildroot em cache e `qemu-img`/`debugfs`/`xz` disponíveis.
+O que é usado:
 
-| Ferramenta | Estado |
+| Ferramenta | Uso |
 | --- | --- |
-| `node` | **disponível** (runtime do DSH) — tudo aqui roda e é testado |
-| `git` / `bash` | ausentes |
-| `rustc` / `cargo` | ausentes (não são usados neste repositório) |
+| `node` 20+ | tudo: pipeline, site, testes |
+| `git` | versionamento (o repositório é real, com `origin`) |
+| `docker` + `giochi-builder:2` | build do Giochi System, quando a imagem não existe |
+| `debugfs` | ler o `index.json` de dentro do `rootfs.ext4` |
+| `xz` / `zstd` / `gzip` | compressão dos artefatos publicados |
 
-Como este repositório é **só Node**, tudo nele é verificável nesta máquina — ao
-contrário do Giochi System (shell) e do launcher (Rust), que nunca foram
-executados.
+Este repositório é **só Node**: tudo nele roda e é testado. O `debugfs` e o
+`xz` são opcionais — sem eles a fase 2 avisa e cai para `gzip`, ou marca
+`apps.imageVerified: false`.
 
 ## 10. Como retomar
 
 ```bash
-cd "C:\Users\Jussara dias\Desktop\plataforma sistema\Giochi os"
 node tests/run-all.mjs
 ```
 
-Fluxo completo, quando houver imagem do sistema:
+Fluxo completo, com a saída do sistema já construída:
 
 ```bash
 node scripts/assemble.mjs apps --apps ../"Giochi app"/app --out ../staging
 # ... rodar o build do Giochi System com o overlay ...
 node scripts/assemble.mjs package --system ../"Giochi System"/out/qemu-aarch64 \
-  --apps ../"Giochi app"/app --out dist --version 0.1.0
+  --apps ../"Giochi app"/app --out dist --version 0.1.0 --compress xz
 node scripts/build-site.mjs --dist dist
 # abrir site/dist/index.html
 ```
 
-Para publicar no GitHub:
+Build do sistema nesta máquina (Linux, container):
 
 ```bash
-git init
-git add .
-git commit -m "Initial Giochi os: junção e site"
-git branch -M main
-git remote add origin https://github.com/xtrempkch-droid/GIOCHI-OS.git
-git push -u origin main
+cd ../GIOCHI-SYSTEM
+GIOCHI_SYSTEM_KEEP_WORK=1 GIOCHI_SYSTEM_GROWTH_LIMIT_MIB=65536 \
+  ROOT_PASSWORD=giochi-system JOBS=12 \
+  bash scripts/build-in-container.sh qemu-aarch64
 ```
 
-## 11. Arquivos que não devem ser commitados
+O `GIOCHI_SYSTEM_GROWTH_LIMIT_MIB` alto é necessário: o monitor de disco padrão
+(4 GiB/20 s) confunde a compilação paralela do `host-gcc-initial` com cópia
+recursiva e aborta o build com "consumiu 9 GiB em 20s".
 
-`dist/`, `site/dist/`, `node_modules/`, e imagens `*.img` / `*.iso` / `*.sdcard`.
+## 11. Publicar
+
+Dois caminhos:
+
+**Manual**, com os artefatos em `dist/`:
+
+```bash
+# crie a release no GitHub e anexe dist/*
+gh release create v0.1.0 dist/* --title "Giochi OS 0.1.0" --notes-file dist/README.txt
+# publique o conteúdo de site/dist (Pages, rsync, S3…)
+```
+
+**Workflow** `.github/workflows/release.yml`: baixa o artefato
+`giochi-system-<device>` do GIOCHI-SYSTEM, empacota, cria a release com
+`dist/*` e publica `site/dist` no Pages. Dispara por tag `v*` ou por
+`workflow_dispatch`. Requer Pages configurado com "GitHub Actions" como origem.
+
+## 12. Arquivos que não devem ser commitados
+
+`dist/`, `site/dist/`, `node_modules/`, e imagens `*.img` / `*.iso` / `*.sdcard`
+(mais os comprimidos `*.img.xz`, `*.img.gz`, `*.img.zst`).
 
 Imagem de cartão é artefato grande e é publicada no site ou em release — nunca no
 Git. O `.gitignore` cobre isso.

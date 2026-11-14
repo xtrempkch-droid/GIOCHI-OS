@@ -26,11 +26,11 @@ Duas fases, porque a ordem importa e cada uma roda em lugar diferente.
         │
         │  o Giochi System consome este overlay
         ▼
-   Giochi System/out/<device>/     (sdcard.img + SHA256SUMS)
+   Giochi System/out/<device>/     (sdcard.img  ou  Image + rootfs.ext4)
         │
         │  fase 2: package  (DEPOIS do build)
         ▼
-   dist/<device>/                  release.json + imagem + SHA256SUMS + README.txt
+   dist/                           release.json + imagem (+ kernel) + SHA256SUMS + README.txt
         │
         │  build-site
         ▼
@@ -65,12 +65,29 @@ node scripts/assemble.mjs package \
   --system ../"Giochi System"/out/qemu-aarch64 \
   --apps ../"Giochi app"/app \
   --out dist \
-  --version 0.1.0
+  --version 0.1.0 \
+  --compress xz
 ```
 
 **Antes de copiar qualquer coisa, verifica o `SHA256SUMS` do sistema.** Um hash
 divergente aborta: significa que a imagem não é a que o build registrou — disco
 cheio, kill no meio, cópia interrompida.
+
+Aceita dois tipos de saída do build:
+
+| Saída do sistema | O que é publicado | Onde vai |
+| --- | --- | --- |
+| `.img` / `.iso` / `.sdcard` | a imagem do cartão | cartão SD (handheld) |
+| `Image` (kernel) + `rootfs.ext4` | disco + kernel | máquina virtual (QEMU) |
+
+O alvo virtual é o caso do `qemu-aarch64`: o Buildroot não roda `genimage` nele.
+O `rootfs.ext4` vira o disco (`-drive`) e o kernel vai como download separado —
+sem ele o disco não inicia. O `README.txt` e o site trazem o comando pronto.
+
+**App na imagem é verificado, não presumido.** Quando o rootfs é um arquivo
+solto, o `debugfs` lê `/opt/giochi/apps/index.json` de dentro dele. Se o overlay
+da fase 1 ficou de fora do build, a release avisa `overlay_ausente` e **não**
+anuncia os apps do catálogo como embutidos.
 
 ## O que não entra na imagem
 
@@ -96,14 +113,18 @@ node scripts/build-site.mjs --dist dist
 Gera `site/dist/index.html` com os cards de download embutidos. **Abre direto do
 disco**, sem servidor: sem `fetch`, sem CORS, sem build de front-end.
 
+Cada card sabe que tipo de imagem publica: as de cartão ensinam o `dd`, as de
+máquina virtual trazem o comando do QEMU e o link do kernel.
+
 Detalhes em [docs/site.md](docs/site.md).
 
 ## Comandos
 
 ```bash
-node tests/run-all.mjs                              # 20 testes
+node tests/run-all.mjs                              # 31 testes
 node scripts/assemble.mjs apps --apps <app/> --out <staging>
-node scripts/assemble.mjs package --system <out/device> --apps <app/> --out dist
+node scripts/assemble.mjs package --system <out/device> --apps <app/> --out dist \
+  --version 0.1.0 --compress xz
 node scripts/build-site.mjs --dist dist
 ```
 
@@ -119,6 +140,10 @@ Giochi os/
 │       ├── system.mjs         # saída do Giochi System
 │       ├── pipeline.mjs       # as duas fases, testáveis
 │       ├── site.mjs           # geração do HTML
+│       ├── compress.mjs       # xz/zstd com queda para gzip
+│       ├── rootfs.mjs         # lê apps de dentro do ext4
+│       ├── qemu.mjs           # comando de boot do alvo virtual
+│       ├── names.mjs          # nome cru × nome comprimido
 │       └── fs.mjs             # hash, JSON, listagem
 ├── site/
 │   ├── template.html
@@ -129,11 +154,12 @@ Giochi os/
 
 ## Estado
 
-O que está **verificado**: 20 testes passando — junção, verificação de checksum,
-regra de licença, geração do site com links corretos.
+O que está **verificado**: 31 testes passando — junção, verificação de checksum,
+regra de licença, geração do site com links corretos, publicação de alvo virtual
+(disco + kernel), compressão e leitura do `index.json` de dentro do `rootfs.ext4`.
 
-O que **não** está: nenhuma execução com uma imagem real do Giochi System (o build
-nunca rodou) e nenhum `genimage` — a montagem do cartão é feita pelo Giochi
-System, este repositório só empacota e publica.
+O que **não** está: nenhum build de hardware rodado a partir daqui. A montagem do
+cartão (`genimage`/`make-sd-image.sh`) é do Giochi System; este repositório só
+empacota e publica.
 
 Licença MIT — ver [LICENSE](LICENSE).

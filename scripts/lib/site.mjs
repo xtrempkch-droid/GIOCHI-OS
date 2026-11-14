@@ -7,6 +7,7 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { humanSize, isDir, isFile, listDir, readJson, walk } from "./fs.mjs";
+import { decompressCommand, renderQemuCommand } from "./qemu.mjs";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) =>
@@ -48,23 +49,33 @@ function renderRelease(release) {
   const shaShort = sha ? `${sha.slice(0, 12)}…` : "—";
   const href = release.__href;
   const available = Boolean(href);
+  const isVirtual = system.kind === "virtual" || device.kind === "virtual";
 
   const appList = [...(apps.embedded || []), ...(apps.store || [])]
     .map((app) => `<li><span>${escapeHtml(app.id)}</span><em>${escapeHtml(app.version)}</em></li>`)
     .join("");
 
   const button = available
-    ? `<a class="btn" href="${escapeHtml(href)}" download>Baixar imagem</a>`
+    ? `<a class="btn" href="${escapeHtml(href)}" download>Baixar ${isVirtual ? "disco" : "imagem"}</a>`
     : `<span class="btn btn-off">imagem indisponível</span>`;
 
+  // O kernel é um download separado em alvo virtual, e sem ele o disco não
+  // inicia. Escondê-lo transformaria o botão principal num link que não boota.
+  const kernel = system.kernel;
+  const kernelButton =
+    kernel && release.__kernelHref
+      ? `<a class="btn btn-ghost" href="${escapeHtml(release.__kernelHref)}" download>Kernel (${escapeHtml(kernel.sizeHuman || "")})</a>`
+      : "";
+
   const size = system.sizeHuman || (system.sizeBytes ? humanSize(system.sizeBytes) : "—");
+  const kindLabel = isVirtual ? "Máquina virtual" : "Cartão SD";
 
   return `
-    <article class="card">
+    <article class="card${isVirtual ? " card-vm" : ""}">
       <header>
         <div>
           <h2>${escapeHtml(device.name || device.id || "Dispositivo")}</h2>
-          <p class="muted">${escapeHtml(device.id || "?")} · ${escapeHtml(device.arch || "?")}</p>
+          <p class="muted">${escapeHtml(device.id || "?")} · ${escapeHtml(device.arch || "?")} · ${escapeHtml(kindLabel)}</p>
         </div>
         <span class="badge">${escapeHtml(system.version || "dev")}</span>
       </header>
@@ -73,6 +84,7 @@ function renderRelease(release) {
         <div><dt>Tamanho</dt><dd>${escapeHtml(size)}</dd></div>
         <div><dt>Buildroot</dt><dd>${escapeHtml(system.buildroot || "—")}</dd></div>
         <div><dt>SHA-256</dt><dd class="mono">${escapeHtml(shaShort)}</dd></div>
+        ${kernel ? `<div><dt>Kernel</dt><dd class="mono">${escapeHtml(kernel.name)}</dd></div>` : ""}
       </dl>
 
       ${
@@ -81,11 +93,43 @@ function renderRelease(release) {
           : ""
       }
 
+      ${isVirtual ? renderRunBlock(release) : ""}
+
       <footer>
         ${button}
+        ${kernelButton}
         <span class="muted mono">${escapeHtml(system.image || "")}</span>
       </footer>
     </article>`;
+}
+
+/**
+ * Bloco "como rodar" dos alvos virtuais.
+ *
+ * O comando é o mesmo do `README.txt` da release: sai de `renderQemuCommand`,
+ * não de uma cópia. Se o `-append` mudar, muda nos dois lugares de uma vez.
+ */
+function renderRunBlock(release) {
+  const system = release.system || {};
+  const boot = release.boot || {};
+  if (!boot.disk) return "";
+
+  const decompress = [system.image, system.kernel?.name]
+    .filter(Boolean)
+    .map((name) => decompressCommand(name))
+    .filter(Boolean);
+
+  return `
+        <details class="run">
+          <summary>Como iniciar no QEMU</summary>
+          ${
+            decompress.length > 0
+              ? `<p class="muted">Descomprima primeiro:</p><pre><code>${decompress.map(escapeHtml).join("\n")}</code></pre>`
+              : ""
+          }
+          <pre><code>${escapeHtml(renderQemuCommand(boot))}</code></pre>
+          <p class="muted">Login <code>root</code>. Para sair do console: <code>Ctrl+A</code>, depois <code>X</code>.</p>
+        </details>`;
 }
 
 /**
@@ -130,27 +174,47 @@ export function generateSite({
     const imageName = release.system?.image;
     if (!imageName) continue;
 
+    const targetDir = path.join(outDir, "downloads", deviceId);
+
     const sourceImage = path.join(release.__dir, imageName);
     if (!isFile(sourceImage)) {
       warnings.push({
         message: `${deviceId}: imagem não encontrada em ${release.__dir}; o card sai sem link`,
       });
       release.__href = null;
-      continue;
-    }
-
-    if (copyImages) {
-      const targetDir = path.join(outDir, "downloads", deviceId);
+    } else if (copyImages) {
       mkdirSync(targetDir, { recursive: true });
       copyFileSync(sourceImage, path.join(targetDir, imageName));
       release.__href = `downloads/${deviceId}/${imageName}`;
-
-      const sums = path.join(release.__dir, "SHA256SUMS");
-      if (isFile(sums)) {
-        copyFileSync(sums, path.join(targetDir, "SHA256SUMS"));
-      }
     } else {
       release.__href = `${release.__relative}/${imageName}`;
+    }
+
+    // O kernel é um segundo download no alvo virtual. Publicar o disco e
+    // deixar o kernel para trás dá um botão que baixa um arquivo que não inicia.
+    const kernelName = release.system?.kernel?.name;
+    if (kernelName) {
+      const sourceKernel = path.join(release.__dir, kernelName);
+      if (!isFile(sourceKernel)) {
+        warnings.push({
+          message: `${deviceId}: kernel ${kernelName} não encontrado; o disco sai sem link de kernel`,
+        });
+        release.__kernelHref = null;
+      } else if (copyImages) {
+        mkdirSync(targetDir, { recursive: true });
+        copyFileSync(sourceKernel, path.join(targetDir, kernelName));
+        release.__kernelHref = `downloads/${deviceId}/${kernelName}`;
+      } else {
+        release.__kernelHref = `${release.__relative}/${kernelName}`;
+      }
+    }
+
+    if (copyImages) {
+      const sums = path.join(release.__dir, "SHA256SUMS");
+      if (isFile(sums)) {
+        mkdirSync(targetDir, { recursive: true });
+        copyFileSync(sums, path.join(targetDir, "SHA256SUMS"));
+      }
     }
   }
 
@@ -169,9 +233,11 @@ export function generateSite({
       releases.map((release) => ({
         device: release.device,
         system: release.system,
+        boot: release.boot || null,
         apps: release.apps,
         generatedAt: release.generatedAt,
         href: release.__href,
+        kernelHref: release.__kernelHref || null,
       })),
       null,
       2,

@@ -4,16 +4,19 @@
 // Importa as libs em vez de spawnar os CLIs: sob o sandbox, spawnar falha com
 // EPERM, e a função pura é o que interessa testar.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 
 import { loadApps, pngSize } from "../scripts/lib/apps.mjs";
 import { isFile } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
+import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
 import { inspectSystemBuild, parseChecksums } from "../scripts/lib/system.mjs";
 
@@ -475,5 +478,263 @@ test("todo asset referenciado pelo site é publicado", async () => {
         `asset referenciado mas não publicado: ${ref}`,
       );
     }
+  });
+});
+
+// ── alvo virtual: kernel + rootfs, sem cartão ────────────────
+
+/** Saída do Buildroot para QEMU: `Image` e `rootfs.ext4`, nada de .img. */
+function makeVirtualSystemOutput(dir, { console: consoleName = "ttyAMA0" } = {}) {
+  const kernel = Buffer.from("kernel arm64 de teste");
+  const rootfs = Buffer.from("rootfs ext4 de teste");
+  write(path.join(dir, "Image"), kernel);
+  write(path.join(dir, "rootfs.ext4"), rootfs);
+  write(
+    path.join(dir, "device.json"),
+    JSON.stringify({
+      id: "qemu-aarch64",
+      name: "QEMU AArch64 Virt",
+      arch: "arm64",
+      buildroot: "2024.02",
+      buildrootDefconfig: "qemu_aarch64_virt_defconfig",
+      kernelCmdline: { console: consoleName },
+    }),
+  );
+  write(path.join(dir, "build-info.txt"), "name=Giochi System\nbuildroot=2024.02\n");
+  write(
+    path.join(dir, "SHA256SUMS"),
+    [
+      `${sha256(kernel)}  Image`,
+      `${sha256(rootfs)}  rootfs.ext4`,
+      `${sha256(readFileSync(path.join(dir, "device.json")))}  device.json`,
+      `${sha256(readFileSync(path.join(dir, "build-info.txt")))}  build-info.txt`,
+      "",
+    ].join("\n"),
+  );
+  return { kernel, rootfs };
+}
+
+test("inspectSystemBuild reconhece kernel + rootfs de alvo virtual", async () => {
+  await withTempDirAsync(async (dir) => {
+    makeVirtualSystemOutput(dir);
+    const result = await inspectSystemBuild(dir);
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.images.length, 0);
+    assert.equal(result.kernel.name, "Image");
+    assert.equal(result.rootfs.name, "rootfs.ext4");
+    assert.equal(result.virtual, true);
+    // Sem cartão mas com kernel+rootfs não é problema: é o normal do QEMU.
+    assert.equal(
+      result.warnings.some((warning) => warning.code === "sem_imagem"),
+      false,
+    );
+  });
+});
+
+test("fase package publica disco + kernel de alvo virtual", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    const { kernel, rootfs } = makeVirtualSystemOutput(systemDir);
+    const outDir = path.join(dir, "dist");
+
+    const result = await runPackagePhase({ systemDir, outDir, version: "0.1.0" });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const release = JSON.parse(readFileSync(path.join(outDir, "release.json"), "utf8"));
+    assert.equal(release.system.kind, "virtual");
+    assert.equal(release.system.image, "giochi-qemu-aarch64-0.1.0.img");
+    assert.equal(release.system.imageSha256, sha256(rootfs));
+    assert.equal(release.system.kernel.name, "giochi-qemu-aarch64-0.1.0-Image");
+    assert.equal(release.system.kernel.sha256, sha256(kernel));
+    assert.equal(isFile(path.join(outDir, release.system.kernel.name)), true);
+
+    // O comando do QEMU tem de citar o kernel e o disco publicados, com o
+    // console que o kernel realmente usou.
+    assert.equal(release.boot.kernel, release.system.kernel.name);
+    assert.equal(release.boot.disk, release.system.image);
+    assert.match(release.boot.cmdline, /root=\/dev\/vda/);
+    assert.match(release.boot.cmdline, /console=ttyAMA0/);
+
+    const sums = readFileSync(path.join(outDir, "SHA256SUMS"), "utf8").trim().split("\n");
+    assert.equal(sums.length, 2, "o manifesto tem de cobrir disco e kernel");
+
+    const readme = readFileSync(path.join(outDir, "README.txt"), "utf8");
+    assert.match(readme, /qemu-system-aarch64/);
+    assert.match(readme, /-kernel giochi-qemu-aarch64-0\.1\.0-Image/);
+    assert.doesNotMatch(readme, /dd if=/, "imagem de VM não se grava em cartão");
+  });
+});
+
+test("fase package comprime a imagem e o kernel quando pedido", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    makeVirtualSystemOutput(systemDir);
+    const outDir = path.join(dir, "dist");
+
+    const result = await runPackagePhase({
+      systemDir,
+      outDir,
+      version: "0.1.0",
+      compress: "gz",
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const release = JSON.parse(readFileSync(path.join(outDir, "release.json"), "utf8"));
+    assert.equal(release.system.image, "giochi-qemu-aarch64-0.1.0.img.gz");
+    assert.equal(release.system.kernel.name, "giochi-qemu-aarch64-0.1.0-Image.gz");
+
+    // O hash publicado é o do arquivo comprimido — é ele que o usuário baixa.
+    const packed = readFileSync(path.join(outDir, release.system.image));
+    assert.equal(release.system.imageSha256, sha256(packed));
+    assert.equal(zlib.gunzipSync(packed).toString(), "rootfs ext4 de teste");
+
+    // O cru não fica ao lado: dois arquivos com o mesmo conteúdo dobram o
+    // download e convidam a baixar o errado.
+    assert.equal(isFile(path.join(outDir, "giochi-qemu-aarch64-0.1.0.img")), false);
+  });
+});
+
+test("site de alvo virtual linka kernel e traz o comando do QEMU", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    makeVirtualSystemOutput(systemDir);
+    const distDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir: distDir, version: "0.1.0" });
+
+    const outDir = path.join(dir, "site");
+    const result = generateSite({
+      distDir,
+      outDir,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const html = readFileSync(result.indexPath, "utf8");
+    assert.match(html, /Máquina virtual/);
+    assert.match(html, /class="card card-vm"/);
+    assert.match(html, /downloads\/qemu-aarch64\/giochi-qemu-aarch64-0\.1\.0-Image/);
+    assert.match(html, /qemu-system-aarch64/);
+    assert.match(html, /-append &quot;root=\/dev\/vda rw console=ttyAMA0&quot;/);
+
+    // O kernel é um download de verdade, não só um link no HTML.
+    assert.equal(
+      isFile(path.join(outDir, "downloads", "qemu-aarch64", "giochi-qemu-aarch64-0.1.0-Image")),
+      true,
+    );
+  });
+});
+
+test("site de cartão não mostra bloco de QEMU", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "r35s");
+    makeSystemOutput(systemDir);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "r35s", name: "R35S", arch: "arm64", buildroot: "2024.02" }),
+    );
+    const distDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir: distDir, version: "0.1.0" });
+
+    const result = generateSite({
+      distDir,
+      outDir: path.join(dir, "site"),
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const html = readFileSync(result.indexPath, "utf8");
+    assert.doesNotMatch(html, /qemu-system-aarch64/);
+    assert.match(html, /Cartão SD/);
+  });
+});
+
+// ── o que está dentro do rootfs ──────────────────────────────
+
+function binaryAvailable(name) {
+  const result = spawnSync(name, ["-V"], { stdio: "ignore" });
+  return !result.error && result.status === 0;
+}
+
+/** ext4 de verdade, populado a partir de uma pasta, sem root. */
+function makeExt4(dir, rootContent) {
+  const source = path.join(dir, "rootdir");
+  for (const [relative, content] of Object.entries(rootContent)) {
+    write(path.join(source, relative), content);
+  }
+  const image = path.join(dir, "rootfs.ext4");
+  const result = spawnSync(
+    "mkfs.ext4",
+    ["-q", "-F", "-b", "1024", "-d", source, image, "16384"],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  return image;
+}
+
+test("readRootfsApps lê o índice de dentro do ext4", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const index = { schemaVersion: 1, apps: [{ id: "launcher", version: "0.1.0" }] };
+    const image = makeExt4(dir, {
+      "opt/giochi/apps/index.json": JSON.stringify(index),
+      "etc/motd": "oi\n",
+    });
+
+    const result = readRootfsApps(image);
+    assert.equal(result.ok, true, result.reason);
+    assert.deepEqual(result.apps, index.apps);
+  });
+});
+
+test("readRootfsApps não inventa app quando o overlay ficou de fora", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const image = makeExt4(dir, { "etc/motd": "sem overlay\n" });
+    const result = readRootfsApps(image);
+    assert.equal(result.ok, false);
+    assert.ok(result.reason);
+  });
+});
+
+test("fase package não anuncia app que não está no rootfs", async (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    const kernel = Buffer.from("kernel");
+    write(path.join(systemDir, "Image"), kernel);
+    const rootfsPath = makeExt4(dir, { "etc/motd": "sem overlay\n" });
+    writeFileSync(path.join(systemDir, "rootfs.ext4"), readFileSync(rootfsPath));
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "qemu-aarch64", name: "QEMU", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(path.join(systemDir, "build-info.txt"), "buildroot=2024.02\n");
+    const rootfsBytes = readFileSync(path.join(systemDir, "rootfs.ext4"));
+    write(
+      path.join(systemDir, "SHA256SUMS"),
+      `${sha256(kernel)}  Image\n${sha256(rootfsBytes)}  rootfs.ext4\n`,
+    );
+
+    const appsRoot = path.join(dir, "apps");
+    makeRegistry(appsRoot, [makeApp(appsRoot, { id: "launcher" })]);
+
+    const result = await runPackagePhase({
+      systemDir,
+      appsRoot,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.release.apps.embedded.length, 0);
+    assert.equal(result.release.apps.imageVerified, true);
+    assert.ok(result.warnings.some((warning) => warning.code === "overlay_ausente"));
   });
 });

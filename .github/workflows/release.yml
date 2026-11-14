@@ -1,0 +1,162 @@
+name: Release
+
+# Junta o que o Giochi System construiu e publica: release do GitHub com os
+# artefatos e site de download no GitHub Pages.
+#
+# Este repositório não compila nada (ver AGENTS.md §8). O build do sistema é do
+# GIOCHI-SYSTEM; aqui ele é *baixado* como artefato e empacotado.
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: "Device já construído no Giochi System"
+        required: false
+        default: "qemu-aarch64"
+        type: string
+      version:
+        description: "Versão publicada (vazio = nome da tag)"
+        required: false
+        default: ""
+        type: string
+      system_run_id:
+        description: "Run do Giochi System (vazio = último build bem-sucedido)"
+        required: false
+        default: ""
+        type: string
+      system_repo:
+        description: "Repositório do Giochi System"
+        required: false
+        default: "xtrempkch-droid/GIOCHI-SYSTEM"
+        type: string
+      app_repo:
+        description: "Repositório do Giochi app"
+        required: false
+        default: "xtrempkch-droid/GIOCHI-APP"
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DEVICE: ${{ inputs.device || 'qemu-aarch64' }}
+  SYSTEM_REPO: ${{ inputs.system_repo || 'xtrempkch-droid/GIOCHI-SYSTEM' }}
+  APP_REPO: ${{ inputs.app_repo || 'xtrempkch-droid/GIOCHI-APP' }}
+
+jobs:
+  package:
+    name: Empacotar e publicar
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Testes
+        run: node tests/run-all.mjs
+
+      - name: Resolver versão
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if [ -z "$VERSION" ]; then
+            VERSION="0.1.0"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publicando versão $VERSION de $DEVICE"
+
+      - name: Checkout do catálogo de apps
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          path: .deps/app
+          token: ${{ secrets.SYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolver o build do sistema
+        id: system
+        env:
+          GH_TOKEN: ${{ secrets.SYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ inputs.system_run_id }}"
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh api \
+              "repos/$SYSTEM_REPO/actions/workflows/build-linux-arm64.yml/runs?branch=main&status=success&per_page=1" \
+              --jq '.workflow_runs[0].id')
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "ERRO: nenhum build bem-sucedido do Giochi System para $DEVICE." >&2
+            echo "Construa o device lá primeiro, ou passe system_run_id." >&2
+            echo "Se o repositório for privado, defina o secret SYSTEM_TOKEN (PAT com actions:read)." >&2
+            exit 1
+          fi
+          echo "run=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "usando o run $RUN_ID de $SYSTEM_REPO"
+
+      - name: Baixar os artefatos do sistema
+        uses: actions/download-artifact@v4
+        with:
+          name: giochi-system-${{ env.DEVICE }}
+          path: .deps/system
+          repository: ${{ env.SYSTEM_REPO }}
+          run-id: ${{ steps.system.outputs.run }}
+          github-token: ${{ secrets.SYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Empacotar a release
+        run: |
+          node scripts/assemble.mjs package \
+            --system .deps/system \
+            --apps .deps/app/app \
+            --out dist \
+            --version "${{ steps.version.outputs.value }}" \
+            --compress xz
+
+      - name: Gerar o site
+        run: node scripts/build-site.mjs --dist dist
+
+      - name: Publicar a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.version.outputs.value) }}
+          name: Giochi OS ${{ steps.version.outputs.value }}
+          body_path: dist/README.txt
+          files: dist/*
+          fail_on_unmatched_files: true
+          overwrite_files: true
+
+      - name: Preparar o site para o Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    name: Publicar o site
+    needs: package
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

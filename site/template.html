@@ -39,7 +39,8 @@
         <h1>O sistema, e os apps, no mesmo lugar.</h1>
         <p class="lede">
           O Giochi OS é a base Linux limpa construída com Buildroot, entregue como
-          imagem pronta para o cartão. Os apps vivem fora da imagem: você instala
+          imagem pronta para o cartão. Também há imagem de máquina virtual, para
+          testar no QEMU sem hardware. Os apps vivem fora da imagem: você instala
           pela loja, na partição gravável, e pode substituí-los quando quiser.
         </p>
         <div class="cta">
@@ -72,7 +73,8 @@
       <h2 class="h2">Imagens por aparelho</h2>
       <p class="muted">
         Cada imagem é específica do hardware: kernel, device tree, driver de
-        painel e layout de partição são do aparelho, não genéricos.
+        painel e layout de partição são do aparelho, não genéricos. As de
+        máquina virtual trazem o comando do QEMU no próprio card.
       </p>
 
       <div class="grid">
@@ -84,6 +86,11 @@
   <section id="gravar" class="section section-alt">
     <div class="wrap">
       <h2 class="h2">Gravar no cartão</h2>
+      <p class="muted">
+        Só para as imagens de <strong>cartão SD</strong>. As de
+        <strong>máquina virtual</strong> não vão para cartão: descomprima e rode
+        o comando que está no card do aparelho.
+      </p>
       <div class="steps">
         <div class="step">
           <span class="num">1</span>

@@ -17,6 +17,20 @@ const REQUIRED_METADATA = ["device.json", "build-info.txt", "SHA256SUMS"];
 /** Imagem de cartão, crua ou comprimida. */
 const IMAGE_PATTERN = /\.(img|iso|sdcard)(\.(xz|gz|zst))?$/i;
 
+/**
+ * Kernel solto. O Buildroot publica nomes diferentes conforme a arquitetura:
+ * `Image` no ARM64, `bzImage`/`zImage` no x86 e ARM32.
+ */
+const KERNEL_PATTERN = /^(Image|bzImage|zImage|uImage)$/;
+
+/**
+ * Sistema de arquivos do rootfs, ainda sem tabela de partição.
+ *
+ * Quando não existe imagem de cartão, é daqui que sai o "cartão" do QEMU: um
+ * rootfs ext4 cru já é um disco válido para o virtio-blk.
+ */
+const ROOTFS_PATTERN = /^rootfs\.(ext[234]|squashfs)$/i;
+
 /** Extensão completa da imagem, preservando `.gz`/`.xz`/`.zst`. */
 export function imageExtension(name) {
   const match = name.match(/(\.(?:img|iso|sdcard)(?:\.(?:xz|gz|zst))?)$/i);
@@ -129,19 +143,60 @@ export async function inspectSystemBuild(systemDir) {
     });
   }
 
-  if (images.length === 0) {
+  // Kernel e rootfs soltos: é o que o Buildroot entrega para um alvo virtual,
+  // onde não existe `genimage` montando um cartão. Sem eles, um build de QEMU
+  // não teria nada para publicar.
+  let kernel = null;
+  let rootfs = null;
+  for (const entry of listDir(systemDir)) {
+    const full = path.join(systemDir, entry);
+    if (!isFile(full)) continue;
+    if (!kernel && KERNEL_PATTERN.test(entry)) {
+      kernel = { name: entry, sizeBytes: sizeOf(full), path: full };
+    } else if (!rootfs && ROOTFS_PATTERN.test(entry)) {
+      rootfs = { name: entry, sizeBytes: sizeOf(full), path: full };
+    }
+  }
+
+  if (images.length === 0 && !(kernel && rootfs)) {
     warnings.push({
       code: "sem_imagem",
-      message: "nenhum .img/.iso encontrado; o build pode ter parado antes do genimage",
+      message:
+        "nenhum .img/.iso encontrado; o build pode ter parado antes do genimage" +
+        " (kernel + rootfs também são aceitos, para alvos virtuais)",
     });
   }
 
   return {
     ok: errors.length === 0,
     device,
+    deviceId: String(device?.id || path.basename(path.resolve(systemDir))),
+    virtual: isVirtualDevice(device, systemDir),
     images,
+    kernel,
+    rootfs,
     checksums,
     errors,
     warnings,
   };
+}
+
+/**
+ * O alvo é uma máquina virtual, não um handheld com cartão.
+ *
+ * O `device.json` do Giochi System ainda não declara isso, então a decisão sai
+ * do que ele já traz: defconfig do QEMU ou id que nomeia uma VM. Errar para
+ * "hardware" é o lado seguro — o site mostra o passo de `dd`, que só é
+ * desnecessário; o contrário mandaria gravar um disco virtual num cartão.
+ */
+export function isVirtualDevice(device, systemDir) {
+  if (!device || typeof device !== "object") {
+    return /qemu|virtual|vm\b/i.test(path.basename(String(systemDir || "")));
+  }
+  if (device.virtual === true) return true;
+  if (device.virtual === false) return false;
+  const haystack = [device.id, device.name, device.buildrootDefconfig, device.arch]
+    .filter(Boolean)
+    .join(" ");
+  return /qemu|virtual|\bvm\b/i.test(haystack);
 }
