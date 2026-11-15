@@ -424,6 +424,25 @@ jobs:
           path: site/dist
           retention-days: 30
 
+      - name: Pedir o Pages em "GitHub Actions"
+        # `actions/deploy-pages` exige `build_type: workflow`. Este repositório
+        # foi criado com "Deploy from a branch", e nesse modo o site nunca sobe
+        # — o deploy falha com 404 e leva junto a publicação da release se os
+        # dois estiverem amarrados.
+        #
+        # A chamada é idempotente e `continue-on-error`: se o token não tiver
+        # força para mudar a configuração, nada muda e o passo seguinte avisa.
+        # Com `pages: write` (declarado em `permissions`) ela costuma passar.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          ATUAL=$(gh api "repos/${{ github.repository }}/pages" --jq '.build_type' 2>/dev/null || echo "ausente")
+          echo "build_type atual: $ATUAL"
+          if [ "$ATUAL" != "workflow" ]; then
+            gh api -X PUT "repos/${{ github.repository }}/pages" -f build_type=workflow >/dev/null
+            echo "build_type agora: $(gh api "repos/${{ github.repository }}/pages" --jq '.build_type')"
+          fi
+
       - name: O Pages está em "GitHub Actions"?
         id: pages
         run: |
