@@ -284,6 +284,13 @@ export async function loadApps(appsRoot) {
     };
     walkDir(binDir, appDir);
 
+    // Os jogos carregam a arte ao lado do binário: `<jogo>/assets/` é onde o
+    // executável procura (`current_exe()/../assets`). Copiar só `bin/` levava
+    // o jogo para a imagem sem textura, sem modelo e sem áudio — ele abria,
+    // degradado, e o manifesto não tinha como denunciar.
+    const assetsDir = path.join(appDir, "assets");
+    if (isDir(assetsDir)) walkDir(assetsDir, appDir);
+
     const hashes = {};
     for (const relative of files.sort()) {
       hashes[relative] = await sha256File(path.join(appDir, relative));

@@ -32,7 +32,7 @@
 // ext4 no meio da escrita produz um arquivo truncado, e o app passa a falhar de
 // um jeito que não parece falta de espaço.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, openSync, readSync, closeSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -97,6 +97,18 @@ export function readFromImage(imagePath, target) {
 
 /** Bibliotecas que um ELF pede (`DT_NEEDED`). */
 export function neededLibraries(binaryPath) {
+  // Só ELF: o overlay agora leva `assets/` junto do binário (`.png`, `.bmp`,
+  // `.obj`), e spawnar `readelf` para cada textura seria dezenas de processos
+  // para ouvir sempre a mesma resposta.
+  const magic = Buffer.alloc(4);
+  const fd = openSync(binaryPath, "r");
+  try {
+    readSync(fd, magic, 0, 4, 0);
+  } finally {
+    closeSync(fd);
+  }
+  if (magic.toString("latin1") !== "\x7fELF") return null;
+
   // `LC_ALL=C` porque o `readelf` desta máquina fala português
   // ("Biblioteca Compartilhada"). Um regex preso ao inglês devolveria lista
   // vazia EM SILÊNCIO — e a checagem de biblioteca ausente nunca dispararia,

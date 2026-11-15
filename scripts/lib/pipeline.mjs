@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { loadAppsFromRoots } from "./apps.mjs";
 import { compressFile } from "./compress.mjs";
-import { humanSize, isFile, sha256File, sizeOf, walk } from "./fs.mjs";
+import { humanSize, isFile, sha256File, sizeOf } from "./fs.mjs";
 import {
   injectIntoCardImage,
   injectOverlay,
@@ -19,15 +19,6 @@ import { readRootfsApps } from "./rootfs.mjs";
 import { imageExtension, inspectSystemBuild } from "./system.mjs";
 
 export const GENERATOR_VERSION = "0.1.0";
-
-function copyTree(sourceDir, targetDir) {
-  for (const relative of walk(sourceDir)) {
-    const source = path.join(sourceDir, relative);
-    const target = path.join(targetDir, relative);
-    mkdirSync(path.dirname(target), { recursive: true });
-    copyFileSync(source, target);
-  }
-}
 
 /**
  * Fase 1 — transforma apps de distribuição "image" num overlay de rootfs.
@@ -46,7 +37,7 @@ export async function runAppsPhase({ appsRoot, appsRoots, outDir }) {
   const overlayDir = path.join(outDir, "rootfs-overlay");
   const appsDir = path.join(overlayDir, "opt", "giochi", "apps");
 
-  // A saída é RECRIADA a cada execução. `copyTree` escreve e sobrescreve, mas
+  // A saída é RECRIADA a cada execução. A cópia escreve e sobrescreve, mas
   // nunca APAGA: um app removido do catálogo continuava no overlay e ia para a
   // imagem, com o `index.json` (que é regerado) sem citá-lo. Medido em
   // 14/11/2026: os jogos saíram do catálogo do Giochi app e as pastas deles
@@ -58,7 +49,15 @@ export async function runAppsPhase({ appsRoot, appsRoots, outDir }) {
 
   for (const app of apps.embedded) {
     const target = path.join(appsDir, app.id);
-    copyTree(path.join(app.dir, "bin"), path.join(target, "bin"));
+    // Copia exatamente os arquivos que o catálogo declarou — `app.files` é o
+    // mesmo conjunto que entrou no manifesto, com hash. Copiar a pasta `bin/`
+    // inteira fazia a imagem divergir do que ela mesma anuncia: o `.gitkeep`
+    // dos jogos não estava na lista e ia para dentro do ext4 de qualquer jeito.
+    for (const relative of app.files || []) {
+      const destino = path.join(target, relative);
+      mkdirSync(path.dirname(destino), { recursive: true });
+      copyFileSync(path.join(app.dir, relative), destino);
+    }
     copyFileSync(path.join(app.dir, "metadata.json"), path.join(target, "metadata.json"));
 
     const capa = path.join(app.dir, "capa.png");

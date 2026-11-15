@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
 import { loadApps, loadAppsFromRoots, pngSize } from "../scripts/lib/apps.mjs";
-import { isFile } from "../scripts/lib/fs.mjs";
+import { isFile, walk } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
 import {
   injectIntoCardImage,
@@ -23,6 +23,7 @@ import {
   readAppsFromCardImage,
   readFromImage,
 } from "../scripts/lib/inject.mjs";
+import { flattenReleaseAssets } from "../scripts/lib/release-assets.mjs";
 import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
 import { inspectSystemBuild, parseChecksums } from "../scripts/lib/system.mjs";
@@ -1895,4 +1896,120 @@ test("o release publica os artefatos mesmo sem Pages configurado", () => {
   assert.match(fonte, /name:\s*giochi-os-site/);
   assert.match(fonte, /pages_ready: \$\{\{ steps\.pages\.outputs\.ready \}\}/);
   assert.match(fonte, /if:\s*needs\.publish\.outputs\.pages_ready == 'true'/);
+});
+
+test("fase apps leva assets/ para a imagem, junto de bin/", async () => {
+  // Os jogos carregam a arte ao lado do binário (`current_exe()/../assets`).
+  // Sem esta cópia o jogo entrava na imagem e abria sem textura, sem modelo e
+  // sem áudio — degradado, sem nada no manifesto denunciando.
+  await withTempDirAsync(async (dir) => {
+    const root = path.join(dir, "jogos");
+    const appDir = makeJogo(root, { folder: "com-arte" });
+    write(path.join(appDir, "assets", "texturas", "chao.bmp"), "BMP");
+    write(path.join(appDir, "assets", "modelos", "torre.obj"), "v 0 0 0");
+
+    const resultado = await runAppsPhase({ appsRoots: [root], outDir: path.join(dir, "out") });
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+
+    const overlay = path.join(dir, "out", "rootfs-overlay", "opt", "giochi", "apps", "com-arte");
+    assert.equal(isFile(path.join(overlay, "bin", "jogo")), true);
+    assert.equal(isFile(path.join(overlay, "assets", "texturas", "chao.bmp")), true);
+    assert.equal(isFile(path.join(overlay, "assets", "modelos", "torre.obj")), true);
+    assert.deepEqual(
+      [...resultado.apps.embedded[0].files].sort(),
+      ["assets/modelos/torre.obj", "assets/texturas/chao.bmp", "bin/jogo"],
+    );
+  });
+});
+
+test("fase apps copia exatamente o que o manifesto lista, sem .gitkeep", async () => {
+  // O overlay copiava a pasta `bin/` inteira, então o `.gitkeep` dos jogos ia
+  // para dentro do ext4 mesmo não estando em `files` — a imagem divergia do
+  // que ela mesma anunciava.
+  await withTempDirAsync(async (dir) => {
+    const root = path.join(dir, "jogos");
+    const appDir = makeJogo(root, { folder: "com-marcador" });
+    write(path.join(appDir, "bin", ".gitkeep"), "");
+
+    const resultado = await runAppsPhase({ appsRoots: [root], outDir: path.join(dir, "out") });
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+
+    const overlay = path.join(dir, "out", "rootfs-overlay", "opt", "giochi", "apps", "com-marcador");
+    assert.equal(isFile(path.join(overlay, "bin", "jogo")), true);
+    assert.equal(isFile(path.join(overlay, "bin", ".gitkeep")), false);
+  });
+});
+
+// ── anexos da release ───────────────────────────────────────
+
+function makeReleaseDir(distDir, devices) {
+  for (const device of devices) {
+    const dir = path.join(distDir, device);
+    write(path.join(dir, "SHA256SUMS"), `abc  giochi-${device}.img.xz\n`);
+    write(path.join(dir, "README.txt"), "Checksum:\n  sha256sum -c SHA256SUMS\n");
+    write(path.join(dir, "release.json"), JSON.stringify({ device: { id: device } }));
+    write(path.join(dir, `giochi-${device}.img.xz`), "xz");
+  }
+}
+
+test("anexos de dois aparelhos não colidem no nível da release", () => {
+  // Medido na v0.1.1: `dist/<device>/SHA256SUMS` chegava à release achatado e
+  // o segundo aparelho sobrescrevia o primeiro. O publicado tinha só uma
+  // linha, e metade dos usuários não conseguia conferir o download.
+  withTempDir((dir) => {
+    makeReleaseDir(dir, ["powkiddy-x55", "qemu-aarch64"]);
+    const resultado = flattenReleaseAssets(dir);
+
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.devices, ["powkiddy-x55", "qemu-aarch64"]);
+    assert.deepEqual(resultado.attachments, [
+      "powkiddy-x55-SHA256SUMS",
+      "powkiddy-x55-README.txt",
+      "powkiddy-x55-release.json",
+      "qemu-aarch64-SHA256SUMS",
+      "qemu-aarch64-README.txt",
+      "qemu-aarch64-release.json",
+    ].sort());
+
+    const nomes = walk(dir).map((f) => path.basename(f));
+    assert.equal(nomes.length, new Set(nomes).size, "nenhum nome-base se repete");
+  });
+});
+
+test("cada SHA256SUMS desdobrado conserva as próprias linhas", () => {
+  withTempDir((dir) => {
+    makeReleaseDir(dir, ["a", "b"]);
+    write(path.join(dir, "a", "SHA256SUMS"), "aaa  giochi-a.img.xz\n");
+    write(path.join(dir, "b", "SHA256SUMS"), "bbb  giochi-b.img.xz\n");
+
+    assert.equal(flattenReleaseAssets(dir).ok, true);
+    assert.equal(readFileSync(path.join(dir, "a-SHA256SUMS"), "utf8"), "aaa  giochi-a.img.xz\n");
+    assert.equal(readFileSync(path.join(dir, "b-SHA256SUMS"), "utf8"), "bbb  giochi-b.img.xz\n");
+    assert.equal(isFile(path.join(dir, "a", "SHA256SUMS")), false, "o original sai do dist");
+  });
+});
+
+test("o README desdobrado cita o arquivo de checksum que existe", () => {
+  withTempDir((dir) => {
+    makeReleaseDir(dir, ["powkiddy-x55"]);
+    assert.equal(flattenReleaseAssets(dir).ok, true);
+    const texto = readFileSync(path.join(dir, "powkiddy-x55-README.txt"), "utf8");
+    assert.match(texto, /sha256sum -c powkiddy-x55-SHA256SUMS/);
+    assert.doesNotMatch(texto, /sha256sum -c SHA256SUMS/);
+  });
+});
+
+test("nome repetido que sobra é erro, não anexo perdido", () => {
+  withTempDir((dir) => {
+    makeReleaseDir(dir, ["a"]);
+    // Um nome novo que passe a se repetir cai na mesma checagem — a regra não
+    // é sobre os três nomes conhecidos, é sobre o conjunto achatado.
+    write(path.join(dir, "outro", "NOTAS.txt"), "1");
+    write(path.join(dir, "outro2", "NOTAS.txt"), "2");
+
+    const resultado = flattenReleaseAssets(dir);
+    assert.equal(resultado.ok, false);
+    assert.deepEqual(resultado.collisions.map((c) => c.nome), ["NOTAS.txt"]);
+    assert.equal(resultado.errors[0].code, "anexo_colide");
+  });
 });
