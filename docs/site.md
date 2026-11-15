@@ -50,10 +50,36 @@ rsync -av site/dist/ usuario@servidor:/var/www/giochi/
 Como o site é estático, serve qualquer hospedagem: Nginx, GitHub Pages, S3,
 Netlify. Não há back-end.
 
-O workflow `.github/workflows/release.yml` faz o caminho completo: baixa o
-artefato `giochi-system-<device>` do GIOCHI-SYSTEM, empacota, cria a release do
-GitHub com `dist/*` e publica `site/dist` no Pages. Dispara por tag `v*` ou por
-`workflow_dispatch` (`device`, `version`, `system_run_id`).
+O workflow `.github/workflows/release.yml` faz o caminho completo, e é **uma
+execução para todos os aparelhos**:
+
+```text
+discover  → lê device/devices.json do GIOCHI-SYSTEM, devolve os habilitados
+   ↓
+package   (matriz) → baixa o artefato de cada device, empacota com
+                     --inject-apps, sobe um dist/<device> por artefato
+   ↓
+publish   → reúne todos os dist, gera o site UMA vez, cria a release, sobe Pages
+   ↓
+deploy    → publica no GitHub Pages
+```
+
+O `discover` não é enfeite. Publicar um device por execução parece simples e tem
+um defeito que só aparece depois: cada execução gera o **seu** site, e a segunda
+sobrescreve o Pages com uma página de um card só. Com a matriz, todos entram na
+mesma release e num único deploy.
+
+Dispara por tag `v*` ou por `workflow_dispatch`. Inputs:
+
+| Input | Uso |
+| --- | --- |
+| `devices` | lista separada por vírgula; vazio = habilitados no GIOCHI-SYSTEM |
+| `version` | versão publicada; vazio = nome da tag |
+| `system_run_id` | run específico do GIOCHI-SYSTEM; vazio = último verde |
+
+O `publish` confere que recebeu **um `release.json` por device** antes de gerar
+o site. Sem isso, um download incompleto publicaria uma página com menos cards e
+o deploy sairia verde.
 
 Para o Pages funcionar, a origem precisa estar em **Settings → Pages → Source:
 GitHub Actions**. O workflow usa `actions/upload-pages-artifact` e

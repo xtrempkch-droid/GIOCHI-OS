@@ -250,10 +250,22 @@ gh release create v0.1.0 dist/* --title "Giochi OS 0.1.0" --notes-file dist/READ
 # publique o conteúdo de site/dist (Pages, rsync, S3…)
 ```
 
-**Workflow** `.github/workflows/release.yml`: baixa o artefato
-`giochi-system-<device>` do GIOCHI-SYSTEM, empacota, cria a release com
-`dist/*` e publica `site/dist` no Pages. Dispara por tag `v*` ou por
-`workflow_dispatch`. Requer Pages configurado com "GitHub Actions" como origem.
+**Workflow** `.github/workflows/release.yml` — **uma execução para todos os
+aparelhos**, em quatro jobs:
+
+| Job | O que faz |
+| --- | --- |
+| `discover` | lê `device/devices.json` do GIOCHI-SYSTEM e devolve os habilitados |
+| `package` | matriz: baixa o artefato de cada device, empacota com `--inject-apps` |
+| `publish` | reúne os dist, gera o site **uma vez**, cria a release, sobe o Pages |
+| `deploy` | publica no GitHub Pages |
+
+Publicar um device por execução parece mais simples e tem um defeito que só
+aparece depois: cada execução gera o seu site, e a segunda sobrescreve o Pages
+com uma página de um card só.
+
+Dispara por tag `v*` ou por `workflow_dispatch` (`devices`, `version`,
+`system_run_id`). Requer Pages configurado com "GitHub Actions" como origem.
 
 O workflow depende de um run **verde** do GIOCHI-SYSTEM: sem artefato ele para
 no passo "Resolver o build do sistema". Se o `workflow_dispatch` for usado, o
