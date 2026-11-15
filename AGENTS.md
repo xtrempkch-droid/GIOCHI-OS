@@ -338,16 +338,15 @@ As releases `v0.1.1` e `v0.1.2` ficaram com os anexos colidindo (`SHA256SUMS`
 de um aparelho no lugar do outro) — são anteriores às correções de §7.7. Use a
 `v0.1.6` ou mais nova.
 
-**O site ainda não está no ar.** O Pages deste repositório está em
-"Deploy from a branch" e nesse modo `actions/deploy-pages` sempre falha. O
-`publish` tenta trocar via `PUT /pages` com o `GITHUB_TOKEN`, mas o endpoint
-exige permissão de administrador e a troca não acontece. Falta um clique:
+**O site está no ar.** `https://xtrempkch-droid.github.io/GIOCHI-OS/` serve o
+`index.html` da raiz — conferido com `curl`: 200, o mesmo arquivo do commit
+(172.108 bytes) e os sete links de download respondendo 200.
 
-> Settings → Pages → Source: **GitHub Actions**
-
-Enquanto isso, o site gerado está no artefato `giochi-os-site` de cada
-execução do `Release` (30 dias de retenção), e o job `Publicar o site` aparece
-como *skipped* — não como sucesso.
+Isso funcionou porque o Pages deste repositório está em **"Deploy from a
+branch"**: ele publica o repositório, e o `index.html` da raiz é a página. A
+tentativa anterior de publicar por `actions/deploy-pages` exigia trocar para
+`build_type: workflow` — configuração de administrador, que o `GITHUB_TOKEN` não
+alcança. Um arquivo no branch resolve sem permissão nenhuma.
 
 ## 12. Arquivos que não devem ser commitados
 
