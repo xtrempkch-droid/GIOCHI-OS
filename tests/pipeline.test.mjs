@@ -2136,3 +2136,10 @@ test("a expectativa de releases não pode vir de um `wc -l`", () => {
   assert.match(fonte, /JSON\.parse\(process\.argv\[1\]\)\.length/);
   assert.match(fonte, /needs\.discover\.outputs\.devices_json/);
 });
+
+test("o Validate roda quando um workflow muda", () => {
+  // Sem isto, um `release.yml` inválido — que o GitHub transforma em execução
+  // sem nenhum job — passa pelo `Validate` sem ser visto.
+  const validate = readFileSync(path.join(ROOT, ".github", "workflows", "validate.yml"), "utf8");
+  assert.match(validate, /\.github\/workflows\/\*\*/);
+});

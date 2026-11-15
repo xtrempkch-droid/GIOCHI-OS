@@ -9,7 +9,13 @@ on:
       - "tests/**"
       - "site/**"
       - "package.json"
-      - ".github/workflows/validate.yml"
+      # `release.yml` inválido não falha num job: o GitHub cria uma execução
+      # SEM nenhum job, com a mensagem só no HTML. O teste que lê os workflows
+      # em busca de função inexistente é o único jeito de isso aparecer num PR
+      # — e ele precisa rodar quando o workflow muda. Medido em 15/11/2026:
+      # uma `replace()` (que não existe no Actions) derrubou todos os releases
+      # e o `Validate` ficou verde porque o filtro de caminho não cobria aqui.
+      - ".github/workflows/**"
 
 permissions:
   contents: read
