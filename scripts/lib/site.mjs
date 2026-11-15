@@ -19,6 +19,7 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "no
 import path from "node:path";
 
 import { humanSize, isDir, isFile, listDir, readJson, walk } from "./fs.mjs";
+import { IDIOMAS, PADRAO, TEXTOS, validarTraducoes } from "./i18n.mjs";
 import { decompressCommand, renderQemuCommand } from "./qemu.mjs";
 import { nomeComAparelho } from "./release-assets.mjs";
 
@@ -111,6 +112,232 @@ export function collectReleases(distDir) {
   return { releases, problems };
 }
 
+// ── i18n no HTML ───────────────────────────────────────────
+//
+// O gerador faz duas coisas com o dicionário:
+//
+//   1. escreve o idioma PADRÃO dentro dos elementos marcados com `data-i18n`,
+//      para a página existir inteira sem JavaScript;
+//   2. embute o dicionário e um script de 2 KB que troca os textos quando o
+//      visitante escolhe outro idioma.
+//
+// A ordem importa: preencher ANTES de injetar os dados de idioma, senão o
+// próprio bloco JSON seria preenchido.
+
+/**
+ * Desfaz as entidades que `jsonAtributo` escreveu.
+ *
+ * O valor lido do HTML chega escapado (`&quot;`…). O navegador desfaz isso
+ * sozinho ao entregar o atributo; aqui, que lemos o HTML como texto, temos de
+ * desfazer na mão.
+ */
+function decodificarAtributo(valor) {
+  return valor
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Troca `{n}`, `{size}` e `{data}` pelos valores do elemento.
+ *
+ * A substituição é a mesma que o script faz no navegador — se divergissem, a
+ * página mudaria de texto ao clicar num idioma sem mudar de idioma.
+ */
+function aplicarVars(texto, varsJson) {
+  if (!varsJson) return texto;
+  let mapa;
+  try {
+    mapa = JSON.parse(decodificarAtributo(varsJson));
+  } catch {
+    return texto;
+  }
+  let saida = texto;
+  for (const [chave, valor] of Object.entries(mapa)) {
+    saida = saida.split(`{${chave}}`).join(String(valor));
+  }
+  return saida;
+}
+
+/**
+ * Preenche o idioma padrão em todo elemento vazio marcado com `data-i18n`.
+ *
+ * O elemento pode ter OUTROS atributos depois do `data-i18n` — e tem, quando há
+ * número no texto (`data-i18n-vars`). Uma primeira versão casava só
+ * `data-i18n="chave"></` e deixava de fora justamente os textos com número: os
+ * botões de download e o resumo dos apps apareciam VAZIOS para quem chega sem
+ * JavaScript. Por isso a varredura é da tag de abertura inteira.
+ *
+ * Devolve o HTML e as chaves usadas — comparar com o dicionário é o que prova
+ * que template e traduções falam do mesmo conjunto.
+ */
+export function preencherPadrao(html, textos) {
+  const usadas = new Set();
+  const faltando = [];
+
+  let saida = html.replace(
+    /<([a-zA-Z][\w-]*)((?:\s+[^<>]*?)?\s+data-i18n(?:-html)?="([^"]+)"(?:\s+[^<>]*?)?)>\s*<\/\1>/g,
+    (todo, tag, atributos, chave) => {
+      usadas.add(chave);
+      const valor = textos[chave];
+      if (valor == null) {
+        faltando.push(chave);
+        return todo;
+      }
+      // O atributo é escrito com aspas simples (o JSON tem aspas duplas
+      // dentro), então procurar só `"` não acha nada — e o texto saía com
+      // `{size}` literal na tela.
+      const vars = /data-i18n-vars=(?:"([^"]*)"|'([^']*)')/.exec(atributos);
+      const texto = aplicarVars(valor, vars ? vars[1] ?? vars[2] : null);
+      const ehHtml = /data-i18n-html=/.test(atributos);
+      return `<${tag}${atributos}>${ehHtml ? texto : escapeHtml(texto)}</${tag}>`;
+    },
+  );
+
+  // `content` de `<meta>` não é conteúdo de elemento: é atributo.
+  saida = saida.replace(/<meta([^<>]*\sdata-i18n-content="([^"]+)"[^<>]*)>/g, (todo, atributos, chave) => {
+    usadas.add(chave);
+    const valor = textos[chave];
+    if (valor == null) {
+      faltando.push(chave);
+      return todo;
+    }
+    const escapado = escapeHtml(valor);
+    const comConteudo = /\scontent="[^"]*"/.test(atributos)
+      ? atributos.replace(/\scontent="[^"]*"/, ` content="${escapado}"`)
+      : `${atributos} content="${escapado}"`;
+    return `<meta${comConteudo}>`;
+  });
+
+  return { html: saida, usadas, faltando };
+}
+
+/**
+ * JSON para dentro de um atributo HTML com aspas simples.
+ *
+ * `escapeHtml` NÃO serve aqui: ele troca `"` por `&quot;`, e o navegador não
+ * desfaz isso ao ler o atributo — o `JSON.parse` do script recebia
+ * `{&quot;n&quot;:6}` e estourava, derrubando a troca de idioma na página
+ * inteira. Aqui só o que quebraria o atributo é escapado: `&`, `'` e `<`.
+ */
+function jsonAtributo(valor) {
+  return JSON.stringify(valor).replace(/&/g, "&amp;").replace(/'/g, "&#39;").replace(/</g, "&lt;");
+}
+
+/** Item do seletor de idioma. O nome fica no próprio alfabeto. */
+function renderIdioma(idioma, atual) {
+  return (
+    `<li><button type="button" data-lang="${idioma.code}" lang="${idioma.bcp47}"` +
+    `${idioma.code === atual ? ' aria-current="true"' : ""}>` +
+    `<span>${escapeHtml(idioma.proprio)}</span>` +
+    `<small>${escapeHtml(idioma.nome)}</small></button></li>`
+  );
+}
+
+/**
+ * Script de troca de idioma.
+ *
+ * Fica embutido na página (nada externo) e é o ÚNICO JavaScript do arquivo. Ele
+ * não cria conteúdo: só troca textos que já estão no HTML pelo idioma embutido
+ * no JSON ao lado. Se falhar, a página continua inteira no idioma padrão.
+ */
+const SCRIPT_IDIOMA = String.raw`
+(function () {
+  var dados = JSON.parse(document.getElementById("i18n-dados").textContent);
+  var idiomas = dados.idiomas;
+  var textos = dados.textos;
+  var raiz = document.documentElement;
+  var CHAVE = "giochi-idioma";
+
+  function porCodigo(codigo) {
+    for (var i = 0; i < idiomas.length; i += 1) {
+      if (idiomas[i].code === codigo) return idiomas[i];
+    }
+    return null;
+  }
+
+  function aplicar(codigo) {
+    var idioma = porCodigo(codigo);
+    if (!idioma) return false;
+    var t = textos[codigo];
+    raiz.lang = idioma.bcp47;
+    raiz.dir = idioma.dir;
+
+    var alvos = document.querySelectorAll("[data-i18n]");
+    for (var i = 0; i < alvos.length; i += 1) {
+      var chave = alvos[i].getAttribute("data-i18n");
+      var valor = t[chave];
+      if (valor == null) continue;
+      var vars = alvos[i].getAttribute("data-i18n-vars");
+      if (vars) {
+        var mapa = JSON.parse(vars);
+        for (var k in mapa) {
+          valor = valor.split("{" + k + "}").join(mapa[k]);
+        }
+      }
+      alvos[i].textContent = valor;
+    }
+
+    var comHtml = document.querySelectorAll("[data-i18n-html]");
+    for (var j = 0; j < comHtml.length; j += 1) {
+      var k2 = comHtml[j].getAttribute("data-i18n-html");
+      if (t[k2] != null) comHtml[j].innerHTML = t[k2];
+    }
+
+    var comConteudo = document.querySelectorAll("[data-i18n-content]");
+    for (var m = 0; m < comConteudo.length; m += 1) {
+      var k3 = comConteudo[m].getAttribute("data-i18n-content");
+      if (t[k3] != null) comConteudo[m].setAttribute("content", t[k3]);
+    }
+
+    var botoes = document.querySelectorAll("[data-lang]");
+    for (var b = 0; b < botoes.length; b += 1) {
+      if (botoes[b].getAttribute("data-lang") === codigo) {
+        botoes[b].setAttribute("aria-current", "true");
+      } else {
+        botoes[b].removeAttribute("aria-current");
+      }
+    }
+
+    var rotulo = document.getElementById("idioma-atual");
+    if (rotulo) rotulo.textContent = idioma.proprio;
+
+    try { localStorage.setItem(CHAVE, codigo); } catch (e) {}
+    return true;
+  }
+
+  function doNavegador() {
+    var lista = navigator.languages || [navigator.language || ""];
+    for (var i = 0; i < lista.length; i += 1) {
+      var codigo = String(lista[i]).toLowerCase().split("-")[0];
+      if (porCodigo(codigo)) return codigo;
+    }
+    return null;
+  }
+
+  var salvo = null;
+  try { salvo = localStorage.getItem(CHAVE); } catch (e) {}
+  var inicial = (salvo && porCodigo(salvo))
+    ? salvo
+    : (doNavegador() || dados.padrao);
+  aplicar(inicial);
+
+  document.addEventListener("click", function (evento) {
+    var botao = evento.target.closest("[data-lang]");
+    if (!botao) return;
+    aplicar(botao.getAttribute("data-lang"));
+    var detalhe = botao.closest("details");
+    if (detalhe) detalhe.open = false;
+  });
+})();
+`;
+
+function renderIdiomas(atual) {
+  return IDIOMAS.map((idioma) => renderIdioma(idioma, atual)).join("\n              ");
+}
+
 function isVirtualRelease(release) {
   const system = release.system || {};
   const device = release.device || {};
@@ -140,20 +367,28 @@ function renderRelease(release) {
     .map((app) => `<li><span>${escapeHtml(app.id)}</span><em>${escapeHtml(app.version)}</em></li>`)
     .join("");
 
+  // `data-i18n-vars` leva os números para o script: o texto de cada idioma tem
+  // o marcador `{size}` e o script substitui. Texto montado em JS seria texto
+  // que não existe sem JS.
+  const varsSize = jsonAtributo({ size });
   const botoes = [
     release.__href
-      ? `<a class="btn" href="${escapeHtml(release.__href)}" download>Baixar ${virtual ? "disco" : "imagem"} (${escapeHtml(size)})</a>`
-      : `<span class="btn btn-off">imagem indisponível</span>`,
+      ? `<a class="btn" href="${escapeHtml(release.__href)}" download ` +
+        `data-i18n="${virtual ? "card.downloadDisk" : "card.downloadCard"}" ` +
+        `data-i18n-vars='${varsSize}'></a>`
+      : `<span class="btn btn-off" data-i18n="card.unavailable"></span>`,
     // O kernel é um download separado no alvo virtual, e sem ele o disco não
     // inicia. Escondê-lo transformaria o botão principal num link que não boota.
     release.__kernelHref
-      ? `<a class="btn btn-ghost" href="${escapeHtml(release.__kernelHref)}" download>Kernel (${escapeHtml(system.kernel?.sizeHuman || "")})</a>`
+      ? `<a class="btn btn-ghost" href="${escapeHtml(release.__kernelHref)}" download ` +
+        `data-i18n="card.kernelButton" ` +
+        `data-i18n-vars='${jsonAtributo({ size: system.kernel?.sizeHuman || "" })}'></a>`
       : "",
     release.__sumsHref
-      ? `<a class="btn btn-ghost" href="${escapeHtml(release.__sumsHref)}" download>Checksum</a>`
+      ? `<a class="btn btn-ghost" href="${escapeHtml(release.__sumsHref)}" download data-i18n="card.checksum"></a>`
       : "",
     release.__readmeHref
-      ? `<a class="btn btn-ghost" href="${escapeHtml(release.__readmeHref)}" download>Instruções</a>`
+      ? `<a class="btn btn-ghost" href="${escapeHtml(release.__readmeHref)}" download data-i18n="card.instructions"></a>`
       : "",
   ].filter(Boolean);
 
@@ -162,24 +397,24 @@ function renderRelease(release) {
       <header>
         <div>
           <h2>${escapeHtml(device.name || device.id || "Dispositivo")}</h2>
-          <p class="muted">${escapeHtml(device.id || "?")} · ${escapeHtml(device.arch || "?")} · ${escapeHtml(kindLabel)}</p>
+          <p class="muted">${escapeHtml(device.id || "?")} · ${escapeHtml(device.arch || "?")} · <span data-i18n="${virtual ? "card.kindVirtual" : "card.kindCard"}"></span></p>
         </div>
         <span class="badge">${escapeHtml(system.version || "dev")}</span>
       </header>
 
       <dl class="specs">
-        <div><dt>Tamanho</dt><dd>${escapeHtml(size)}</dd></div>
-        <div><dt>Buildroot</dt><dd>${escapeHtml(system.buildroot || "—")}</dd></div>
-        <div><dt>Apps na imagem</dt><dd>${apps.embedded?.length || 0}</dd></div>
-        <div><dt>Apps na loja</dt><dd>${apps.store?.length || 0}</dd></div>
-        ${system.kernel ? `<div><dt>Kernel</dt><dd class="mono">${escapeHtml(system.kernel.name)}</dd></div>` : ""}
+        <div><dt data-i18n="card.size"></dt><dd>${escapeHtml(size)}</dd></div>
+        <div><dt data-i18n="card.buildroot"></dt><dd>${escapeHtml(system.buildroot || "—")}</dd></div>
+        <div><dt data-i18n="card.appsImage"></dt><dd>${apps.embedded?.length || 0}</dd></div>
+        <div><dt data-i18n="card.appsStore"></dt><dd>${apps.store?.length || 0}</dd></div>
+        ${system.kernel ? `<div><dt data-i18n="card.kernel"></dt><dd class="mono">${escapeHtml(system.kernel.name)}</dd></div>` : ""}
       </dl>
 
-      ${sha ? `<p class="sha">sha256 ${escapeHtml(sha)}</p>` : ""}
+      ${sha ? `<p class="sha" dir="ltr">sha256 ${escapeHtml(sha)}</p>` : ""}
 
       ${
         appList
-          ? `<details><summary>Ver os ${appsDe(release).length} app(s)</summary><ul class="apps">${appList}</ul></details>`
+          ? `<details><summary data-i18n="card.showApps" data-i18n-vars='${jsonAtributo({ n: appsDe(release).length })}'></summary><ul class="apps">${appList}</ul></details>`
           : ""
       }
 
@@ -203,10 +438,7 @@ function renderCardHint(system) {
   if (!descomprimir) return "";
 
   return `
-      <p class="muted small hint">
-        Este download é comprimido. <strong>Descomprima antes de gravar</strong> —
-        o <code>dd</code> copia bytes crus:
-      </p>
+      <p class="muted small hint" data-i18n-html="card.hintTitle"></p>
       <pre class="hint"><code>${escapeHtml(descomprimir)}</code></pre>`;
 }
 
@@ -228,20 +460,14 @@ function renderRunBlock(release) {
 
   return `
       <details class="run">
-        <summary>Como iniciar no QEMU</summary>
+        <summary data-i18n="card.runSummary"></summary>
         ${
           decompress.length > 0
-            ? `<p class="muted">Descomprima primeiro:</p><pre><code>${decompress.map(escapeHtml).join("\n")}</code></pre>`
+            ? `<p class="muted" data-i18n="card.runFirst"></p><pre dir="ltr"><code>${decompress.map(escapeHtml).join("\n")}</code></pre>`
             : ""
         }
-        <pre><code>${escapeHtml(renderQemuCommand(boot))}</code></pre>
-        <p class="muted">
-          Login <code>root</code>, senha <code>giochi-system</code>.
-          Para sair do console: <code>Ctrl+A</code>, depois <code>X</code>.
-          Esta imagem é headless: o console é a interface. Os apps estão em
-          <code>/opt/giochi/apps</code> — rode o launcher com
-          <code>SDL_VIDEODRIVER=dummy</code>.
-        </p>
+        <pre dir="ltr"><code>${escapeHtml(renderQemuCommand(boot))}</code></pre>
+        <p class="muted" data-i18n-html="card.runNotes"></p>
       </details>`;
 }
 
@@ -253,9 +479,10 @@ function renderItemList(items) {
 function renderNavDownloads(releases) {
   return releases
     .map(
-      (release) => `<li><a href="#${escapeHtml(deviceAnchor(release))}">${escapeHtml(
-        release.device?.name || release.device?.id || "?",
-      )} <span>${isVirtualRelease(release) ? "QEMU" : "cartão"}</span></a></li>`,
+      (release) =>
+        `<li><a href="#${escapeHtml(deviceAnchor(release))}">${escapeHtml(
+          release.device?.name || release.device?.id || "?",
+        )} <span data-i18n="${isVirtualRelease(release) ? "card.kindVirtual" : "card.kindCard"}"></span></a></li>`,
     )
     .join("\n              ");
 }
@@ -284,7 +511,7 @@ function renderDeviceRows(releases) {
               <td><a href="#${escapeHtml(deviceAnchor(release))}">${escapeHtml(device.name || device.id || "?")}</a></td>
               <td class="mono">${escapeHtml(device.id || "?")}</td>
               <td>${escapeHtml(device.arch || "—")}</td>
-              <td>${isVirtualRelease(release) ? "Máquina virtual" : "Cartão SD"}</td>
+              <td data-i18n="${isVirtualRelease(release) ? "card.kindVirtual" : "card.kindCard"}"></td>
               <td>${escapeHtml(system.version || "—")}</td>
               <td>${escapeHtml(size)}</td>
               <td>${appsDe(release).length}</td>
@@ -324,10 +551,7 @@ function renderReadmeLinks(releases) {
 function renderQemuGeneric(releases) {
   const virtual = releases.find((release) => isVirtualRelease(release));
   if (!virtual || !virtual.boot?.disk) {
-    return `<p class="muted">
-        Nenhuma imagem de máquina virtual publicada no momento. Quando houver, o
-        comando exato aparece aqui e no card dela.
-      </p>`;
+    return `<p class="muted" data-i18n="qemu.empty"></p>`;
   }
   return renderRunBlock(virtual);
 }
@@ -335,28 +559,33 @@ function renderQemuGeneric(releases) {
 /** Links dos repositórios: os três que compõem a imagem, mais este. */
 function renderRepoLinks(repo, releases) {
   const itens = [
-    ["GIOCHI-SYSTEM", "o Linux limpo de cada aparelho"],
-    ["GIOCHI-APP", "os apps e a loja"],
-    ["GIOCHI-GAMES", "os jogos"],
-    ["GIOCHI-OS", "este repositório: junta e publica"],
-  ].map(([nome, descricao]) => {
+    ["GIOCHI-SYSTEM", "repos.system"],
+    ["GIOCHI-APP", "repos.app"],
+    ["GIOCHI-GAMES", "repos.games"],
+    ["GIOCHI-OS", "repos.os"],
+  ].map(([nome, chave]) => {
     const slug = nome === "GIOCHI-OS" ? repo : `${repo.split("/")[0]}/${nome}`;
-    return `<li><a href="https://github.com/${escapeHtml(slug)}">${escapeHtml(nome)} <span class="muted small">— ${escapeHtml(descricao)}</span></a></li>`;
+    return (
+      `<li><a href="https://github.com/${escapeHtml(slug)}">${escapeHtml(nome)} ` +
+      `<span class="muted small">— <span data-i18n="${chave}"></span></span></a></li>`
+    );
   });
 
   const versao = releases[0]?.system?.version;
   if (versao) {
     itens.push(
-      `<li><a href="https://github.com/${escapeHtml(repo)}/releases">Todas as releases</a></li>`,
+      `<li><a href="https://github.com/${escapeHtml(repo)}/releases" data-i18n="repos.all"></a></li>`,
     );
   }
   return itens.join("\n        ");
 }
 
 function renderFooterLinks(repo) {
-  return `<a href="https://github.com/${escapeHtml(repo)}">código</a> ·
-      <a href="https://github.com/${escapeHtml(repo)}/releases">releases</a> ·
-      <a href="https://github.com/${escapeHtml(repo)}/blob/main/AGENTS.md">documentação técnica</a>`;
+  return (
+    `<a href="https://github.com/${escapeHtml(repo)}" data-i18n="foot.code"></a> · ` +
+    `<a href="https://github.com/${escapeHtml(repo)}/releases" data-i18n="foot.releases"></a> · ` +
+    `<a href="https://github.com/${escapeHtml(repo)}/blob/main/AGENTS.md" data-i18n="foot.docs"></a>`
+  );
 }
 
 /**
@@ -525,10 +754,24 @@ export function generateSite({
                width="960" height="524" decoding="async">`;
   }
 
+  // O dicionário tem de estar íntegro antes de ir para dentro da página: uma
+  // chave faltando vira `undefined` na tela, e uma tag não permitida em
+  // `innerHTML` é execução de script com outro nome.
+  const problemasTraducao = validarTraducoes();
+  if (problemasTraducao.length > 0) {
+    errors.push(...problemasTraducao.map((m) => ({ code: "traducao", message: m })));
+    return { ok: false, releases, errors, warnings, indexPath: null };
+  }
+
+  const geradoEm = new Date().toISOString();
+  const padrao = IDIOMAS.find((idioma) => idioma.code === PADRAO);
+
   const template = readFileSync(templatePath, "utf8");
-  const html = template
+  let html = template
     .replace("<!--STYLE-->", styleTag)
     .replace("<!--FAVICON-->", singleFile ? faviconUri() : "assets/favicon.png")
+    .replace("<!--LANG-->", escapeHtml(padrao.bcp47))
+    .replace("<!--DIR-->", escapeHtml(padrao.dir))
     .replace("<!--MARK-->", MARK_SVG)
     .replace("<!--LOGO-->", logoHtml)
     .replace("<!--NAV_DOWNLOADS-->", renderNavDownloads(releases))
@@ -537,12 +780,42 @@ export function generateSite({
     .replace("<!--DEVICE_ROWS-->", renderDeviceRows(releases))
     .replace("<!--SUMS_LINKS-->", renderSumsLinks(releases))
     .replace("<!--README_LINKS-->", renderReadmeLinks(releases))
-    .replace("<!--SUMS_COMMAND-->", "sha256sum -c &lt;aparelho&gt;-SHA256SUMS")
     .replace("<!--QEMU_GENERIC-->", renderQemuGeneric(releases))
     .replace("<!--REPO_LINKS-->", renderRepoLinks(repo, releases))
     .replace("<!--FOOTER_LINKS-->", renderFooterLinks(repo))
-    .replaceAll("<!--GENERATED-->", new Date().toISOString())
-    .replaceAll("<!--COUNT-->", String(releases.length));
+    .replace("<!--IDIOMAS-->", renderIdiomas(PADRAO))
+    .replace("<!--IDIOMA_ATUAL-->", escapeHtml(padrao.proprio))
+    .replaceAll("<!--GENERATED-->", geradoEm)
+    .replaceAll("<!--DATA-->", geradoEm.slice(0, 10))
+    .replaceAll("<!--COUNT-->", String(releases.length))
+    .replace("<!--SCRIPT-->", SCRIPT_IDIOMA.trim());
+
+  // Preencher o idioma padrão DEPOIS de todo o resto: o bloco de dados que
+  // entra abaixo já contém textos em todos os idiomas, e preenchê-lo com o
+  // idioma padrão estragaria o JSON.
+  const preenchido = preencherPadrao(html, TEXTOS[PADRAO]);
+  html = preenchido.html;
+
+  if (preenchido.faltando.length > 0) {
+    errors.push({
+      code: "traducao_ausente",
+      message: `chave(s) usada(s) no template sem tradução: ${[...new Set(preenchido.faltando)].join(", ")}`,
+    });
+    return { ok: false, releases, errors, warnings, indexPath: null };
+  }
+
+  // O dicionário inteiro entra como dado, não como código: `<script
+  // type="application/json">` não é executado, então uma tradução não pode virar
+  // um `</script>` acidental. `<` vira escape unicode por segurança.
+  const dadosIdioma = JSON.stringify({
+    padrao: PADRAO,
+    idiomas: IDIOMAS,
+    textos: TEXTOS,
+  }).replace(/</g, "\\u003c");
+  html = html.replace(
+    "</head>",
+    `<script type="application/json" id="i18n-dados">${dadosIdioma}</script>\n</head>`,
+  );
 
   // Placeholder que sobrar no HTML é uma seção que ninguém preencheu — e ela
   // aparece na página como comentário invisível, sem erro nenhum. Melhor falhar.

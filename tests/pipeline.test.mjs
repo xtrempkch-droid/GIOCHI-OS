@@ -15,6 +15,7 @@ import zlib from "node:zlib";
 
 import { loadApps, loadAppsFromRoots, pngSize } from "../scripts/lib/apps.mjs";
 import { ehDeDesenvolvimento, faltandoNoCheckout } from "../scripts/lib/checkout.mjs";
+import { IDIOMAS, PADRAO, TEXTOS, validarTraducoes } from "../scripts/lib/i18n.mjs";
 import { isFile, walk } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
 import {
@@ -453,7 +454,10 @@ test("generateSite produz html com o device e link da imagem", async () => {
     const html = readFileSync(result.indexPath, "utf8");
     assert.match(html, /QEMU AArch64 Virt/);
     assert.match(html, /downloads\/qemu-aarch64\/giochi-qemu-aarch64-1\.0\.0\.img/);
-    assert.match(html, /1 release\(s\) publicada\(s\)/);
+    // O idioma padrão é o inglês (ver i18n.mjs). O texto vem do dicionário,
+    // não de uma cópia aqui: se a tradução mudar, o teste acompanha.
+    assert.ok(html.includes(TEXTOS[PADRAO]["hero.count"].split("{n}").join("1").split("{data}")[0]),
+      "contagem de releases no idioma padrão");
     assert.equal(
       isFile(path.join(outDir, "downloads", "qemu-aarch64", "giochi-qemu-aarch64-1.0.0.img")),
       true,
@@ -1514,7 +1518,7 @@ test("site avisa para descomprimir antes de gravar no cartão", async () => {
     assert.equal(result.ok, true, JSON.stringify(result.errors));
 
     const html = readFileSync(result.indexPath, "utf8");
-    assert.match(html, /Descomprima antes de gravar/);
+    assert.ok(html.includes(TEXTOS[PADRAO]["card.hintTitle"]), "aviso de descompressão presente");
     assert.match(html, /xz -dk giochi-cartao-teste-1\.0\.0\.img\.xz/);
   });
 });
@@ -1547,7 +1551,7 @@ test("site de cartão cru não mostra aviso de descompressão", async () => {
       stylePath: path.join(ROOT, "site", "assets", "style.css"),
     });
     const html = readFileSync(result.indexPath, "utf8");
-    assert.doesNotMatch(html, /Descomprima antes de gravar/);
+    assert.ok(!html.includes(TEXTOS[PADRAO]["card.hintTitle"]), "cartão cru não avisa descompressão");
   });
 });
 
@@ -2274,8 +2278,11 @@ test("os submenus levam a cada aparelho publicado", () => {
   // e Projeto, com um item por aparelho em dois deles.
   withTempDir((dir) => {
     const { html } = buildSingleFile(dir);
-    for (const menu of ["Baixar", "Instalar", "Aparelhos", "Projeto"]) {
-      assert.ok(html.includes(`<summary>${menu}</summary>`), `falta o submenu ${menu}`);
+    for (const chave of ["nav.download", "nav.install", "nav.devices", "nav.project"]) {
+      assert.ok(
+        html.includes(`<summary data-i18n="${chave}">${TEXTOS[PADRAO][chave]}</summary>`),
+        `falta o submenu ${chave}`,
+      );
     }
     assert.ok(html.includes('href="#baixar-powkiddy-x55"'));
     assert.ok(html.includes('href="#baixar-qemu-aarch64"'));
@@ -2375,5 +2382,168 @@ test("os dois layouts produzem os mesmos links", () => {
     }
 
     assert.deepEqual(ler("b.html"), porPasta);
+  });
+});
+
+// ── multi-idioma ────────────────────────────────────────────
+
+const DEZ_IDIOMAS = ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur"];
+
+test("os dez idiomas mais falados estão publicados", () => {
+  // Inglês, chinês, híndi, espanhol, francês, árabe, bengali, português, russo
+  // e urdu — a lista por falantes totais. Faltar um é publicar "mundialmente"
+  // deixando de fora centenas de milhões de pessoas.
+  assert.deepEqual(IDIOMAS.map((i) => i.code), DEZ_IDIOMAS);
+  for (const idioma of IDIOMAS) {
+    // O nome próprio é o endônimo: "Русский", "العربية", "中文". Em inglês ele
+    // coincide com o nome, e é isso mesmo que se espera.
+    assert.ok(idioma.proprio && idioma.proprio.trim().length > 1, `${idioma.code}: nome próprio`);
+    assert.ok(["ltr", "rtl"].includes(idioma.dir), `${idioma.code}: direção`);
+    assert.ok(idioma.bcp47, `${idioma.code}: bcp47`);
+  }
+});
+
+test("árabe e urdu são RTL, os outros oito são LTR", () => {
+  // Traduzir sem inverter a página deixa o texto ilegível: em árabe a leitura
+  // e o layout andam da direita para a esquerda.
+  const rtl = IDIOMAS.filter((i) => i.dir === "rtl").map((i) => i.code).sort();
+  assert.deepEqual(rtl, ["ar", "ur"]);
+});
+
+test("nenhum idioma tem chave faltando, vazia ou com tag perigosa", () => {
+  assert.deepEqual(validarTraducoes(), []);
+});
+
+test("validarTraducoes recusa tag fora da lista permitida", () => {
+  // O dicionário é nosso, mas `innerHTML` com valor de tradução é execução de
+  // script com outro nome se alguém colar um `<script>` ali.
+  const original = TEXTOS.pt["about.osText"];
+  TEXTOS.pt["about.osText"] = "texto <script>alert(1)</script>";
+  try {
+    const problemas = validarTraducoes();
+    assert.ok(problemas.some((p) => p.includes("script")), JSON.stringify(problemas));
+  } finally {
+    TEXTOS.pt["about.osText"] = original;
+  }
+});
+
+test("o dicionário e o template falam das mesmas chaves", () => {
+  // Chave usada no template e ausente no dicionário vira texto vazio na tela;
+  // chave sobrando é tradução que ninguém usa e que ninguém nota que envelheceu.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const out = path.join(dir, "index.html");
+    const resultado = generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+
+    const html = readFileSync(out, "utf8");
+    const semComentario = html.replace(/<!--[\s\S]*?-->/g, "");
+    const usadas = new Set(
+      [...semComentario.matchAll(/data-i18n(?:-html|-content)?="([^"]+)"/g)].map((m) => m[1]),
+    );
+    // Estas duas só aparecem em estados excepcionais: imagem não publicada e
+    // nenhum alvo virtual. Não usá-las no caso normal é o esperado.
+    const condicionais = new Set(["card.unavailable", "qemu.empty"]);
+    const sobrando = Object.keys(TEXTOS[PADRAO]).filter(
+      (chave) => !usadas.has(chave) && !condicionais.has(chave),
+    );
+    assert.deepEqual(sobrando, [], "chave no dicionário que o template não usa");
+  });
+});
+
+test("a página sem JavaScript está inteira no idioma padrão", () => {
+  // O gerador escreve o idioma padrão no HTML: quem chega sem JS (ou um robô de
+  // busca) tem de ler a página toda. Um elemento vazio é um botão invisível.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const out = path.join(dir, "index.html");
+    generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+
+    const html = readFileSync(out, "utf8");
+    assert.match(html, new RegExp(`<html lang="${PADRAO}" dir="ltr">`));
+    // Nenhum `data-i18n` pode ter ficado sem texto.
+    // "Vazio" é `>` seguido do fecha-tag. Conteúdo que COMEÇA com uma tag
+    // (`<code>dd</code> writes…`) não é vazio — a primeira versão deste teste
+    // confundia os dois e acusava texto traduzido.
+    const vazios = [...html.matchAll(/data-i18n(?:-html)?="([^"]+)"[^>]*><\//g)].map((m) => m[1]);
+    assert.deepEqual(vazios, [], "elemento com data-i18n e sem texto");
+    // Nem marcador sem substituir.
+    const corpo = html.slice(html.indexOf("<body"), html.lastIndexOf("</body>"));
+    const semDados = corpo.replace(/<script type="application\/json"[\s\S]*?<\/script>/g, "");
+    assert.doesNotMatch(semDados, />[^<]*\{n\}[^<]*</);
+    assert.doesNotMatch(semDados, />[^<]*\{size\}[^<]*</);
+  });
+});
+
+test("o idioma escolhido manda no html: lang e dir", () => {
+  // É o que o script faz. Testado aqui como contrato de dados: o `dir` de cada
+  // idioma é o que o navegador recebe.
+  const dom = (codigo) => IDIOMAS.find((i) => i.code === codigo);
+  assert.equal(dom("ar").dir, "rtl");
+  assert.equal(dom("ur").dir, "rtl");
+  assert.equal(dom("zh").bcp47, "zh-CN");
+  assert.equal(dom("pt").bcp47, "pt-BR");
+});
+
+test("o dicionário entra como dado, não como código executável", () => {
+  // `<script type="application/json">` não é executado, e `<` é escapado: uma
+  // tradução não pode fechar o bloco e virar script.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const out = path.join(dir, "index.html");
+    generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+    const html = readFileSync(out, "utf8");
+    const bloco = html.match(/<script type="application\/json" id="i18n-dados">([\s\S]*?)<\/script>/);
+    assert.ok(bloco, "o bloco de dados tem de existir");
+    const dados = JSON.parse(bloco[1]);
+    assert.equal(dados.padrao, PADRAO);
+    assert.deepEqual(dados.idiomas.map((i) => i.code), DEZ_IDIOMAS);
+    for (const codigo of DEZ_IDIOMAS) {
+      assert.equal(Object.keys(dados.textos[codigo]).length, Object.keys(TEXTOS[PADRAO]).length);
+    }
+    // O `<` do JSON tem de estar escapado (ou não haver nenhum).
+    assert.doesNotMatch(bloco[1], /</);
+  });
+});
+
+test("o seletor lista os dez, cada um no próprio alfabeto", () => {
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const out = path.join(dir, "index.html");
+    generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+    const html = readFileSync(out, "utf8");
+    for (const idioma of IDIOMAS) {
+      assert.ok(html.includes(`data-lang="${idioma.code}"`), `falta o botão ${idioma.code}`);
+      assert.ok(html.includes(idioma.proprio), `falta o nome próprio ${idioma.proprio}`);
+    }
+    assert.equal([...html.matchAll(/data-lang="/g)].length, 10);
   });
 });

@@ -13,8 +13,13 @@
   --text:#f1f5f9;
   --dim:#94a3b8;
   --faint:rgba(148,163,184,0.55);
-  --font:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
-  --mono:ui-monospace,Menlo,Consolas,monospace;
+  /* A pilha cobre os dez idiomas publicados: latino, cirílico, árabe, urdu,
+     devanágari, bengali e CJK. Sem os Noto explícitos, um sistema sem fonte
+     chinesa cai no fallback errado e mostra caixas. */
+  --font:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans','Noto Sans Arabic',
+    'Noto Sans Devanagari','Noto Sans Bengali','PingFang SC','Hiragino Sans GB',
+    'Microsoft YaHei','Noto Sans CJK SC',sans-serif;
+  --mono:ui-monospace,Menlo,Consolas,'DejaVu Sans Mono',monospace;
   --radius:14px;
   --wrap:1080px;
 }
@@ -77,14 +82,16 @@ code,pre,.mono{font-family:var(--mono)}
 }
 .menu summary::-webkit-details-marker{display:none}
 .menu summary::after{
-  content:"";width:5px;height:5px;
-  border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+  content:"";flex:none;width:5px;height:5px;
+  border-inline-end:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
   transform:rotate(45deg) translateY(-1px);opacity:0.7;
 }
+/* Em RTL a seta tem de apontar para o outro lado, senão ela "abre" para fora. */
+[dir="rtl"] .menu summary::after{transform:rotate(-135deg) translateY(-1px)}
 .menu summary:hover,.menu summary:focus-visible{color:var(--text);background:rgba(120,160,200,0.08)}
 .menu [open] > summary{color:var(--text);background:rgba(120,160,200,0.1)}
 .menu ul ul{
-  list-style:none;position:absolute;right:0;top:calc(100% + 8px);z-index:30;
+  list-style:none;position:absolute;inset-inline-end:0;top:calc(100% + 8px);z-index:30;
   min-width:250px;padding:8px;
   background:var(--panel);border:1px solid var(--line2);
   border-radius:12px;
@@ -248,9 +255,10 @@ pre code{color:var(--accent)}
 
 .note{
   margin-top:32px;padding:20px 22px;
-  border-left:3px solid var(--accent);
+  border-inline-start:3px solid var(--accent);
   background:rgba(102,192,244,0.06);
-  border-radius:0 var(--radius) var(--radius) 0;
+  border-start-start-radius:0;border-end-start-radius:0;
+  border-start-end-radius:var(--radius);border-end-end-radius:var(--radius);
 }
 .note h3{font-size:15px;margin-bottom:8px}
 .note p{font-size:13px}
@@ -365,7 +373,7 @@ pre code{color:var(--accent)}
 }
 .tabela{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
 .tabela th,.tabela td{
-  padding:12px 16px;text-align:left;
+  padding:12px 16px;text-align:start;
   border-bottom:1px solid var(--line);white-space:nowrap;
 }
 .tabela thead th{
@@ -411,6 +419,46 @@ pre code{color:var(--accent)}
   .menu > ul{gap:2px}
   .menu summary{padding:6px 9px;font-size:13px}
   .menu ul ul{
-    position:fixed;left:12px;right:12px;top:110px;min-width:0;
+    position:fixed;inset-inline:12px;top:110px;min-width:0;
   }
 }
+
+/* ── seletor de idioma ────────────────── */
+.idioma summary{gap:8px}
+.idioma-atual{
+  font-weight:700;color:var(--accent);
+  max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.lista-idiomas{min-width:230px;max-height:min(60vh,420px);overflow-y:auto}
+.lista-idiomas button{
+  display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  width:100%;padding:9px 11px;border:0;border-radius:8px;
+  background:transparent;color:var(--dim);cursor:pointer;
+  font:inherit;font-size:13px;text-align:start;
+}
+.lista-idiomas button:hover,.lista-idiomas button:focus-visible{
+  background:rgba(102,192,244,0.12);color:var(--text);outline:none;
+}
+.lista-idiomas button[aria-current="true"]{
+  background:rgba(102,192,244,0.16);color:var(--text);font-weight:700;
+}
+.lista-idiomas button span{font-size:14px}
+.lista-idiomas button small{font-size:11px;color:var(--faint);font-weight:400}
+.lista-idiomas button[aria-current="true"] small{color:var(--accent)}
+
+/* Aviso para quem chega sem JavaScript. */
+.noscript{
+  max-width:var(--wrap);margin:14px auto 0;padding:10px 16px;
+  border:1px solid rgba(245,158,11,0.4);border-radius:10px;
+  background:rgba(245,158,11,0.1);color:var(--warn);
+  font-size:13px;
+}
+
+/* Código e caminhos continuam LTR mesmo em árabe e urdu: inverter um comando
+   de shell o torna impossível de copiar. */
+[dir="rtl"] pre,[dir="rtl"] code,[dir="rtl"] .mono{direction:ltr;text-align:start}
+[dir="rtl"] .specs dd,[dir="rtl"] .sha{text-align:start}
+[dir="rtl"] .links a{flex-direction:row-reverse}
+
+/* Números e nomes de arquivo em tabela continuam legíveis em RTL. */
+[dir="rtl"] .tabela td.mono{direction:ltr;text-align:start}

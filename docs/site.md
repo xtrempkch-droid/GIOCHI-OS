@@ -43,6 +43,33 @@ Gera `site/dist/index.html` + `assets/` + `downloads/` com as imagens copiadas,
 para conferir a página com os arquivos de verdade. **Não** é o que é publicado —
 e `site/dist/` é ignorado pelo git.
 
+## Idiomas
+
+O mesmo `index.html` fala os dez idiomas mais falados do mundo: inglês, chinês,
+híndi, espanhol, francês, árabe, bengali, português, russo e urdu.
+
+O texto de todos eles vai embutido no arquivo
+(`<script type="application/json" id="i18n-dados">`) e a troca acontece no
+navegador. O dicionário fica em `scripts/lib/i18n.mjs`.
+
+| Aspecto | Como funciona |
+| --- | --- |
+| Padrão | inglês, **escrito no HTML** pelo gerador |
+| Sem JavaScript | página completa no idioma padrão + `<noscript>` avisando |
+| Detecção | `navigator.languages`; idioma fora da lista fica no inglês |
+| Escolha manual | guardada em `localStorage` |
+| Árabe e urdu | `dir="rtl"` no `<html>`; CSS em propriedades lógicas |
+| Código e caminhos | continuam LTR mesmo em RTL |
+
+O dicionário é **dado**, não código: `<script type="application/json">` não é
+executado e `<` é escapado na serialização. `validarTraducoes()` recusa tag fora
+de `<code>`/`<strong>`/`<em>` — o gerador falha antes de escrever a página.
+
+Para acrescentar um idioma: adicionar a entrada em `IDIOMAS` e o bloco em
+`TEXTOS` com as mesmas chaves. O teste "nenhum idioma tem chave faltando" cobra
+a lista completa, e "o dicionário e o template falam das mesmas chaves" cobra o
+contrário — nenhuma chave sobrando.
+
 ## Navegação
 
 Quatro submenus, feitos com `<details>`: abrem sem JavaScript, respondem ao
@@ -54,6 +81,7 @@ teclado e não dependem de hover (que não existe em tela de toque).
 | Instalar | cartão SD, máquina virtual, checksum |
 | Aparelhos | lista, tabela de requisitos e um item por aparelho |
 | Projeto | como é feito, repositórios, licenças |
+| — | seletor de idioma, com os dez nomes no próprio alfabeto |
 
 ## Publicar
 

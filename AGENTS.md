@@ -613,3 +613,53 @@ O `deploy` e o artefato `giochi-os-site` saíram do workflow. O que sobra é:
   `github-actions[bot]`, e a página no ar passou a apontar para os anexos da
   `v0.1.8`. Antes de empurrar ele faz `checkout -B main origin/main` e, se o
   push falhar, `pull --rebase` uma vez.
+
+## 7.10 Decisões (15/11/2026, dez idiomas)
+
+O `index.html` passou a falar os dez idiomas mais falados do mundo: inglês,
+chinês, híndi, espanhol, francês, árabe, bengali, português, russo e urdu.
+
+- **Um arquivo, dez idiomas.** Dez páginas seriam dez arquivos para manter e um
+  link diferente para cada pessoa. O conteúdo dos dez vai embutido no mesmo
+  arquivo (`<script type="application/json" id="i18n-dados">`) e a troca
+  acontece no navegador.
+- **A página continua inteira sem JavaScript.** O gerador **escreve** o idioma
+  padrão no HTML (`preencherPadrao`), então quem chega sem JS — ou um robô de
+  busca — lê tudo. O script só troca textos que já estão lá; ele não cria
+  conteúdo. Sem JS: `lang="en"`, página completa, seletor visível e um
+  `<noscript>` avisando.
+- **Padrão é inglês, detecção automática.** A página é publicada para o mundo e
+  inglês é o único dos dez que a maioria dos visitantes de fora lê. Com JS, o
+  navegador manda: `navigator.languages` escolhe o idioma, e um idioma fora da
+  lista fica no inglês. A escolha manual fica em `localStorage`.
+- **RTL não é tradução: é layout.** Árabe e urdu escrevem da direita para a
+  esquerda. O script troca `dir` no `<html>` e o CSS usa propriedades lógicas
+  (`margin-inline`, `inset-inline-end`, `border-inline-start`,
+  `text-align:start`), então a página inteira se espelha. Código e caminhos
+  continuam LTR dentro de RTL (`[dir="rtl"] pre`): inverter um comando de shell
+  o torna impossível de copiar.
+- **Os nomes dos idiomas ficam no próprio alfabeto.** Quem procura russo
+  encontra "Русский" mesmo sem ler a página em inglês.
+- **O dicionário é dado, não código.** `<script type="application/json">` não é
+  executado, e `<` vira `\u003c` na serialização: uma tradução não pode fechar o
+  bloco e virar script. `validarTraducoes()` recusa tag fora de
+  `<code>`/`<strong>`/`<em>` — `innerHTML` com valor de tradução é execução de
+  script com outro nome.
+
+Dois defeitos medidos durante a implementação, os dois invisíveis para quem tem
+JavaScript ligado e o idioma certo no navegador:
+
+- **Elemento com `data-i18n` e `data-i18n-vars` não era preenchido.** O
+  preenchimento casava `data-i18n="chave"></` — colado no fecha-tag. Com o
+  atributo de variáveis depois, os botões de download, o resumo dos apps e a
+  contagem de releases saíam **vazios** sem JS. Agora a varredura é da tag de
+  abertura inteira.
+- **`escapeHtml` no JSON das variáveis.** `{"n":6}` virava `{&quot;n&quot;:6}`,
+  e o `JSON.parse` do script estourava — derrubando a troca de idioma na página
+  inteira. O navegador **não** desfaz entidade em atributo lido por JS; agora
+  `jsonAtributo()` escapa só `&`, `'` e `<`.
+
+Verificado num DOM de verdade (`jsdom`, fora do repositório): os dez idiomas
+aplicam, `dir` muda para RTL em árabe e urdu, a detecção pelo navegador escolhe
+o idioma certo, idioma fora da lista cai no inglês, o clique troca, e nenhum dos
+96 elementos traduzíveis fica vazio. 105 testes verdes.
