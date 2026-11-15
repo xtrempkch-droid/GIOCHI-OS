@@ -303,20 +303,36 @@ O workflow depende de um run **verde** do GIOCHI-SYSTEM: sem artefato ele para
 no passo "Resolver o build do sistema". Se o `workflow_dispatch` for usado, o
 input `system_run_id` permite apontar um run específico em vez do último.
 
-### Estado da publicação (13/11/2026)
+### Estado da publicação (15/11/2026)
 
-A release `v0.1.0` no GitHub foi criada pelo workflow e está com os artefatos
-de uma imagem **anterior** ao SDL2 (o run do GIOCHI-SYSTEM escolhido foi o
-`f8b914b`, o último verde naquele momento). O `dist/` desta máquina tem a
-imagem boa, verificada no QEMU, mas publicá-la exige refazer o workflow com um
-run do sistema que já contenha SDL2/SDL2_ttf/SDL2_image/SDL2_mixer.
+`v0.1.6` é a release boa, publicada pelo `release.yml` sem intervenção:
 
-O que bloqueia o run novo: `device/devices.json` foi editado para habilitar
-`powkiddy-x55`, que continua `status: "draft"` no `device.json`. A regra em
-`scripts/lib/devices.mjs:188` exige `status: ready` para device habilitado, e a
-validação falha antes de qualquer compilação — derrubando **todos** os builds,
-inclusive o do qemu. Corrigir é decidir o que o X55 é: promover a `ready` (só
-com boot medido no aparelho) ou voltar `enabled` para `false`.
+| Anexo | O que é |
+| --- | --- |
+| `giochi-powkiddy-x55-0.1.6.img.xz` | cartão SD do X55, 46 MB, 2 GiB descomprimido |
+| `giochi-qemu-aarch64-0.1.6.img.xz` | disco da VM, 15 MB |
+| `giochi-qemu-aarch64-0.1.6-Image.xz` | kernel da VM, 3,7 MB |
+| `<aparelho>-SHA256SUMS` | checksum daquele aparelho |
+| `<aparelho>-README.txt` | instruções daquele aparelho |
+
+Conferido baixando do GitHub com o `curl`: o `sha256sum -c` do X55 confere, o
+imagem tem tabela de partição válida, `e2fsck -fn` limpo e os 6 apps em
+`/opt/giochi/apps/index.json`.
+
+As releases `v0.1.1` e `v0.1.2` ficaram com os anexos colidindo (`SHA256SUMS`
+de um aparelho no lugar do outro) — são anteriores às correções de §7.7. Use a
+`v0.1.6` ou mais nova.
+
+**O site ainda não está no ar.** O Pages deste repositório está em
+"Deploy from a branch" e nesse modo `actions/deploy-pages` sempre falha. O
+`publish` tenta trocar via `PUT /pages` com o `GITHUB_TOKEN`, mas o endpoint
+exige permissão de administrador e a troca não acontece. Falta um clique:
+
+> Settings → Pages → Source: **GitHub Actions**
+
+Enquanto isso, o site gerado está no artefato `giochi-os-site` de cada
+execução do `Release` (30 dias de retenção), e o job `Publicar o site` aparece
+como *skipped* — não como sucesso.
 
 ## 12. Arquivos que não devem ser commitados
 
@@ -517,8 +533,7 @@ quando o caminho inteiro roda de verdade.
   `GET /pages` devolve `build_type: workflow`. Com o Pages em `legacy` o job
   `deploy` é pulado, o site fica no artefato e a release sai.
 
-Estado da publicação depois disso: `v0.1.1` publicada com
-`giochi-powkiddy-x55-0.1.1.img.xz` (46,1 MB), `giochi-qemu-aarch64-0.1.1.img.xz`
-e `-Image.xz`. O que falta para o site ficar no ar é **uma configuração**:
-Settings → Pages → Source: **GitHub Actions**. Sem isso o HTML fica no artefato
-`giochi-os-site`.
+Estado da publicação depois disso: ver §11. A `v0.1.6` é a primeira release com
+os nomes separados por aparelho, baixada e conferida de fora. O que falta para o
+site ficar no ar é **uma configuração**: Settings → Pages → Source:
+**GitHub Actions**. Sem isso o HTML fica no artefato `giochi-os-site`.
