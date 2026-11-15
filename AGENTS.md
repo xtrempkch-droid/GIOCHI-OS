@@ -459,6 +459,17 @@ quando o caminho inteiro roda de verdade.
   qualquer função fora da lista real — e o `validate.yml` roda mesmo quando o
   `release.yml` está inválido, que é o único jeito de essa falha aparecer num
   PR em vez de num release.
+- **O layout do artefato não é contrato.** A `v0.1.2` publicou com os nomes
+  ainda colidindo: o desdobramento supôs `dist/<device>/` e o
+  `download-artifact` entregou outro arranjo, então ele não achou nada para
+  desdobrar e o `README-RELEASE.md` saiu só com o cabeçalho. Agora
+  `normalizeDeviceDirs` percorre o `dist` até achar `release.json`, lê o
+  `device.id` de dentro e renomeia a pasta para `dist/<id>/` — antes do site,
+  que precisa de `SHA256SUMS` dentro da pasta do aparelho. Funciona para
+  `dist/<device>/`, `dist/<artefato>/` e `dist/dist/<device>/`, e é erro se
+  dois diretórios declararem o mesmo aparelho. O download passou a
+  `merge-multiple: false` (uma pasta por artefato): achatado, dois
+  `release.json` viram um e não há como saber quem se perdeu.
 - **Anexo de release é plano.** `dist/<device>/SHA256SUMS` de um aparelho
   sobrescreve o do outro. Medido na `v0.1.1` publicada: o `SHA256SUMS` tinha só
   a linha do X55, então quem baixava o disco do QEMU rodava `sha256sum -c`

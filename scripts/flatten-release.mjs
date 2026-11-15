@@ -7,7 +7,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { flattenReleaseAssets } from "./lib/release-assets.mjs";
+import { flattenReleaseAssets, normalizeDeviceDirs } from "./lib/release-assets.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -30,6 +30,24 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 const distDir = path.resolve(args.dist || path.join(ROOT, "dist"));
+
+// Primeiro o layout: o diretório de cada aparelho pode chegar com o nome do
+// artefato (`giochi-os-dist-x55`) ou aninhado (`dist/dist/x55`). O `release.json`
+// de dentro é que diz qual aparelho é.
+const layout = normalizeDeviceDirs(distDir);
+console.log(`aparelhos no dist: ${layout.devices.join(", ") || "(nenhum)"}`);
+if (!layout.ok) {
+  for (const error of layout.errors) console.error(`  [erro] ${error.message}`);
+  console.error("FALHOU: não consegui identificar as releases no dist.");
+  process.exit(1);
+}
+
+if (args["layout-only"]) {
+  // O site precisa ler `dist/<device>/SHA256SUMS` ANTES do desdobramento, que
+  // tira esses arquivos de dentro da pasta do aparelho.
+  console.log("só o layout; nomes preservados.");
+  process.exit(0);
+}
 
 const result = flattenReleaseAssets(distDir);
 

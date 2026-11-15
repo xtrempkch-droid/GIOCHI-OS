@@ -329,7 +329,16 @@ jobs:
         with:
           pattern: giochi-os-dist-*
           path: dist
-          merge-multiple: true
+          # Uma pasta por artefato (`dist/giochi-os-dist-<device>/`) em vez de
+          # tudo achatado: achatado, dois `release.json` viram um e não há como
+          # saber qual aparelho se perdeu. O passo seguinte renomeia cada pasta
+          # para o `device.id` que está dentro do próprio `release.json`.
+          merge-multiple: false
+
+      - name: Batizar os diretórios pelo aparelho
+        # O nome do diretório que o `download-artifact` cria não é contrato.
+        # Quem sabe qual aparelho é está no `release.json` de dentro.
+        run: node scripts/flatten-release.mjs --dist dist --layout-only
 
       - name: Conferir o que foi reunido
         run: |

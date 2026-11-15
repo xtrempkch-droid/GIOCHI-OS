@@ -24,7 +24,7 @@ import {
   readAppsFromCardImage,
   readFromImage,
 } from "../scripts/lib/inject.mjs";
-import { flattenReleaseAssets } from "../scripts/lib/release-assets.mjs";
+import { flattenReleaseAssets, normalizeDeviceDirs } from "../scripts/lib/release-assets.mjs";
 import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
 import { inspectSystemBuild, parseChecksums } from "../scripts/lib/system.mjs";
@@ -2074,4 +2074,54 @@ test("o release.yml recorta os diretórios que a fase apps copia", () => {
   }
   assert.match(fonte, /check-checkout\.mjs --repo \.deps\/games/);
   assert.match(fonte, /check-checkout\.mjs --repo \.deps\/app/);
+});
+
+// ── layout dos artefatos ────────────────────────────────────
+
+function escreverRelease(dir, id) {
+  write(path.join(dir, "SHA256SUMS"), `h-${id}  giochi-${id}.img.xz\n`);
+  write(path.join(dir, "README.txt"), "sha256sum -c SHA256SUMS\n");
+  write(path.join(dir, "release.json"), JSON.stringify({ device: { id } }));
+  write(path.join(dir, `giochi-${id}.img.xz`), "xz");
+}
+
+test("o layout do artefato não importa: o release.json diz o aparelho", () => {
+  // O `download-artifact` pode entregar `dist/<device>/`, `dist/<artefato>/` ou
+  // `dist/dist/<device>/`. A v0.1.2 publicou com os nomes colidindo porque o
+  // desdobramento supôs o primeiro layout e recebeu outro.
+  withTempDir((dir) => {
+    escreverRelease(path.join(dir, "dist", "giochi-os-dist-powkiddy-x55"), "powkiddy-x55");
+    escreverRelease(path.join(dir, "dist", "dist", "qemu-aarch64"), "qemu-aarch64");
+
+    const layout = normalizeDeviceDirs(path.join(dir, "dist"));
+    assert.equal(layout.ok, true, JSON.stringify(layout.errors));
+    assert.deepEqual(layout.devices, ["powkiddy-x55", "qemu-aarch64"]);
+    assert.equal(isFile(path.join(dir, "dist", "powkiddy-x55", "release.json")), true);
+    assert.equal(isFile(path.join(dir, "dist", "qemu-aarch64", "release.json")), true);
+    assert.equal(isFile(path.join(dir, "dist", "dist")), false, "a pasta intermediária vazia sai");
+
+    // E o desdobramento acha os dois.
+    const resultado = flattenReleaseAssets(path.join(dir, "dist"));
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.devices, ["powkiddy-x55", "qemu-aarch64"]);
+  });
+});
+
+test("nenhuma release no dist é erro, não site vazio", () => {
+  withTempDir((dir) => {
+    const layout = normalizeDeviceDirs(dir);
+    assert.equal(layout.ok, false);
+    assert.equal(layout.errors[0].code, "nenhuma_release");
+  });
+});
+
+test("dois diretórios para o mesmo aparelho é erro", () => {
+  // Escolher um em silêncio publicaria a metade errada.
+  withTempDir((dir) => {
+    escreverRelease(path.join(dir, "a"), "powkiddy-x55");
+    escreverRelease(path.join(dir, "b"), "powkiddy-x55");
+    const layout = normalizeDeviceDirs(dir);
+    assert.equal(layout.ok, false);
+    assert.ok(layout.errors.some((e) => e.code === "device_repetido"));
+  });
 });
