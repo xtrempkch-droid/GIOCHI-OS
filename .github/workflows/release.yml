@@ -74,6 +74,11 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       devices: ${{ steps.list.outputs.devices }}
+      # O JSON sai pronto daqui. Montá-lo na expressão da matriz exigiria
+      # `replace()`, que **não existe** nas expressões do Actions — e um nome
+      # de função inexistente não falha no job: invalida o arquivo inteiro, e
+      # o GitHub cria uma execução sem nenhum job.
+      devices_json: ${{ steps.list.outputs.devices_json }}
       run_id: ${{ steps.system.outputs.run }}
       version: ${{ steps.version.outputs.value }}
     steps:
@@ -131,6 +136,9 @@ jobs:
             echo "habilitados no Giochi System: $LIST"
           fi
           echo "devices=$LIST" >> "$GITHUB_OUTPUT"
+          JSON=$(node -e 'process.stdout.write(JSON.stringify(process.argv[1].split(",").filter(Boolean)))' "$LIST")
+          echo "devices_json=$JSON" >> "$GITHUB_OUTPUT"
+          echo "matriz: $JSON"
 
       - name: Resolver o build do sistema
         id: system
@@ -158,7 +166,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: ${{ fromJSON(format('["{0}"]', replace(needs.discover.outputs.devices, ',', '","'))) }}
+        device: ${{ fromJSON(needs.discover.outputs.devices_json) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -254,6 +262,8 @@ jobs:
     name: Publicar release e site
     needs: [discover, package]
     runs-on: ubuntu-24.04
+    outputs:
+      pages_ready: ${{ steps.pages.outputs.ready }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -315,7 +325,42 @@ jobs:
           fail_on_unmatched_files: false
           overwrite_files: true
 
+      - name: Guardar o site como artefato
+        # O site sai daqui mesmo quando o Pages não está em "GitHub Actions".
+        # Sem isso, uma configuração de Pages errada não custaria só o deploy:
+        # custaria também o único lugar onde o HTML gerado existia.
+        uses: actions/upload-artifact@v4
+        with:
+          name: giochi-os-site
+          path: site/dist
+          retention-days: 30
+
+      - name: O Pages está em "GitHub Actions"?
+        id: pages
+        run: |
+          set -euo pipefail
+          # `build_type` é o que decide: `workflow` aceita o deploy-pages;
+          # `legacy` publica o branch e faria o deploy-pages falhar com
+          # "not configured to use GitHub Actions".
+          BUILD_TYPE=$(gh api "repos/${{ github.repository }}/pages" --jq '.build_type' 2>/dev/null || echo "ausente")
+          echo "Pages build_type: $BUILD_TYPE"
+          if [ "$BUILD_TYPE" = "workflow" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### O site não foi publicado"
+              echo
+              echo "O Pages está em \`$BUILD_TYPE\`, não em \`workflow\`."
+              echo "Settings → Pages → Source: **GitHub Actions**."
+              echo
+              echo "O site gerado está no artefato \`giochi-os-site\` desta execução."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Pages em '$BUILD_TYPE' — o site ficou no artefato giochi-os-site; troque a origem para GitHub Actions"
+          fi
+
       - name: Preparar o site para o Pages
+        if: steps.pages.outputs.ready == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site/dist
@@ -323,6 +368,9 @@ jobs:
   deploy:
     name: Publicar o site
     needs: publish
+    # A release dos artefatos é o produto; o site é hospedagem. Amarrar os dois
+    # faria uma configuração de Pages ausente apagar a release inteira.
+    if: needs.publish.outputs.pages_ready == 'true'
     runs-on: ubuntu-24.04
     environment:
       name: github-pages

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -1797,4 +1797,102 @@ test("o CLI aceita --apps repetido e separado por vírgula", () => {
   assert.match(fonte, /split\(","\)/, "aceita vírgula");
   assert.match(fonte, /runAppsPhase\(\{ appsRoots/, "a fase apps recebe as raízes");
   assert.match(fonte, /runPackagePhase\(\{[\s\S]*?appsRoots:/, "a fase package também");
+});
+
+// ---------------------------------------------------------------------------
+// Workflows
+// ---------------------------------------------------------------------------
+
+// Funções que existem nas expressões do GitHub Actions. A lista é a da
+// documentação de `expressions`; qualquer nome fora dela invalida o arquivo
+// INTEIRO — e o GitHub reage criando uma execução sem nenhum job, com a
+// mensagem escondida no HTML. Foi assim que uma `replace()` (que não existe)
+// derrubou todos os releases sem aparecer em lugar nenhum.
+const FUNCOES_DO_ACTIONS = new Set([
+  "contains", "startswith", "endswith", "format", "join", "tojson", "fromjson",
+  "hashfiles", "success", "always", "cancelled", "failure",
+]);
+
+/**
+ * Devolve o corpo de cada `${{ … }}` do texto, respeitando aninhamento de
+ * chaves e aspas — `format('["{0}"]', x)` não pode terminar no `}` do `{0}`.
+ */
+function expressoes(fonte) {
+  const corpos = [];
+  for (let i = fonte.indexOf("${{"); i !== -1; i = fonte.indexOf("${{", i + 1)) {
+    let profundidade = 0;
+    let aspa = null;
+    for (let j = i + 3; j < fonte.length; j += 1) {
+      const c = fonte[j];
+      if (aspa) {
+        if (c === aspa) aspa = null;
+      } else if (c === "'" || c === '"') {
+        aspa = c;
+      } else if (c === "{") {
+        profundidade += 1;
+      } else if (c === "}") {
+        if (profundidade === 0) {
+          if (fonte[j + 1] === "}") {
+            corpos.push(fonte.slice(i + 3, j));
+            i = j + 1;
+            break;
+          }
+        } else {
+          profundidade -= 1;
+        }
+      }
+    }
+  }
+  return corpos;
+}
+
+function funcoesInexistentes(fonte) {
+  const achadas = [];
+  for (const corpo of expressoes(fonte)) {
+    for (const m of corpo.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+      const nome = m[1].toLowerCase();
+      if (!FUNCOES_DO_ACTIONS.has(nome)) achadas.push(m[1]);
+    }
+  }
+  return achadas;
+}
+
+test("as expressões dos workflows só usam funções que o Actions tem", () => {
+  const dir = path.join(ROOT, ".github", "workflows");
+  const arquivos = readdirSync(dir).filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"));
+  assert.ok(arquivos.length > 0, "tem de haver workflow para conferir");
+  for (const arquivo of arquivos) {
+    const fonte = readFileSync(path.join(dir, arquivo), "utf8");
+    assert.deepEqual(
+      funcoesInexistentes(fonte),
+      [],
+      `${arquivo}: função sem equivalente no Actions invalida o arquivo inteiro`,
+    );
+  }
+});
+
+test("o extrator de expressões entende chave aninhada", () => {
+  const corpos = expressoes(
+    "a: ${{ format('[\"{0}\"]', needs.x.outputs.y) }} b: ${{ fromJSON(z) }}",
+  );
+  assert.equal(corpos.length, 2);
+  assert.match(corpos[0], /format\('\["\{0\}"\]'/);
+  assert.match(corpos[1], /fromJSON\(z\)/);
+});
+
+test("a matriz do release sai pronta do discover, sem função inventada", () => {
+  // O defeito medido: a matriz montava o JSON dentro da expressão, com
+  // `replace()`. Aqui o contrato é o oposto — o JSON é um output do job.
+  const fonte = readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  assert.match(fonte, /device:\s*\$\{\{\s*fromJSON\(needs\.discover\.outputs\.devices_json\)\s*\}\}/);
+  assert.match(fonte, /devices_json=\$JSON/);
+});
+
+test("o release publica os artefatos mesmo sem Pages configurado", () => {
+  const fonte = readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  // O site tem de sobreviver num artefato: sem isso, um Pages em `legacy`
+  // deixaria o HTML gerado sem nenhum lugar de onde ser pego.
+  assert.match(fonte, /name:\s*giochi-os-site/);
+  assert.match(fonte, /pages_ready: \$\{\{ steps\.pages\.outputs\.ready \}\}/);
+  assert.match(fonte, /if:\s*needs\.publish\.outputs\.pages_ready == 'true'/);
 });
