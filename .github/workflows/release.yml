@@ -344,13 +344,24 @@ jobs:
         run: |
           set -euo pipefail
           echo "dist/ tem:"
-          find dist -name release.json | sort
+          find dist -maxdepth 6 | sort | head -80
+          {
+            echo "### Diagnóstico do dist"
+            echo
+            echo '```'
+            find dist -maxdepth 6 | sort | head -80
+            echo '```'
+          } > dist/DIAGNOSTICO-DO-DIST.md
           # Sem esta checagem, um download incompleto viraria um site com menos
           # cards — e o deploy publicaria a página, verde.
           COUNT=$(find dist -name release.json | wc -l)
           EXPECTED=$(printf '%s' "${{ needs.discover.outputs.devices }}" | tr ',' '\n' | wc -l)
           if [ "$COUNT" -ne "$EXPECTED" ]; then
-            echo "ERRO: esperava $EXPECTED release(s), encontrei $COUNT" >&2
+            # A anotação é o único lugar da falha que dá para ler sem baixar
+            # log: o `::error::` vira anotação do check-run, e o check-run é
+            # público. O `stderr` do passo, não.
+            LISTA=$(find dist -maxdepth 5 | sort | tr '\n' ' ')
+            echo "::error::esperava $EXPECTED release(s), encontrei $COUNT. dist: $LISTA"
             exit 1
           fi
 
@@ -376,6 +387,8 @@ jobs:
         run: |
           set -euo pipefail
           {
+            cat dist/DIAGNOSTICO-DO-DIST.md
+            echo
             echo "Giochi OS ${{ needs.discover.outputs.version }}"
             echo
             for arquivo in dist/*-README.txt; do

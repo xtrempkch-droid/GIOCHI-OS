@@ -37,18 +37,22 @@ export function nomeComAparelho(device, nome) {
  */
 export function normalizeDeviceDirs(distDir) {
   const encontrados = [];
-  const visitar = (dir, nivel) => {
+  const visitar = (dir) => {
     for (const nome of readdirSync(dir).sort()) {
       const full = path.join(dir, nome);
       if (!isDir(full)) continue;
       if (isFile(path.join(full, "release.json"))) {
         encontrados.push(full);
-      } else if (nivel < 3) {
-        visitar(full, nivel + 1);
+      } else {
+        // Sem limite de profundidade de propósito: o `upload-artifact` usa o
+        // ancestral comum dos caminhos como raiz e o `download-artifact` pode
+        // aninhar mais um nível. Adivinhar a profundidade foi o que fez a
+        // v0.1.2 publicar sem desdobrar nada.
+        visitar(full);
       }
     }
   };
-  visitar(distDir, 1);
+  visitar(distDir);
 
   const errors = [];
   const devices = [];
@@ -76,7 +80,7 @@ export function normalizeDeviceDirs(distDir) {
     vistos.set(id, dir);
 
     const destino = path.join(distDir, id);
-    if (dir !== destino) {
+    if (path.resolve(dir) !== path.resolve(destino)) {
       if (isDir(destino)) {
         errors.push({
           code: "device_repetido",
@@ -84,14 +88,7 @@ export function normalizeDeviceDirs(distDir) {
         });
         continue;
       }
-      renameSync(dir, destino);
-      // O diretório de onde ela saiu pode ter ficado vazio (caso `dist/dist/x`).
-      // `rmdir` só remove vazio, e o erro é o caso normal.
-      try {
-        rmdirSync(path.dirname(dir));
-      } catch {
-        /* ainda tem conteúdo — nada a fazer */
-      }
+      moverDiretorio(dir, destino);
     }
     devices.push(id);
   }
@@ -104,6 +101,20 @@ export function normalizeDeviceDirs(distDir) {
   }
 
   return { ok: errors.length === 0, devices: devices.sort(), errors };
+}
+
+/** Move um diretório e limpa os pais que ficaram vazios no caminho. */
+function moverDiretorio(origem, destino) {
+  renameSync(origem, destino);
+  let pai = path.dirname(origem);
+  while (path.resolve(pai) !== path.resolve(path.dirname(pai)) && isDir(pai) && readdirSync(pai).length === 0) {
+    try {
+      rmdirSync(pai);
+    } catch {
+      break;
+    }
+    pai = path.dirname(pai);
+  }
 }
 
 /**
