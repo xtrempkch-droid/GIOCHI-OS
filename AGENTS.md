@@ -320,17 +320,17 @@ input `system_run_id` permite apontar um run específico em vez do último.
 
 ### Estado da publicação (15/11/2026)
 
-`v0.1.8` é a release boa, publicada pelo `release.yml` sem intervenção, e a
-primeira em que o **robô commitou a página**: o commit
-`site: página de download da 0.1.8` é do `github-actions[bot]` no `main`.
+`v0.1.9` é a release boa: publicada pelo `release.yml` sem intervenção, com a
+página em dez idiomas. Desde a `v0.1.8` o **robô commita a página** — o commit
+`site: página de download da <versão>` é do `github-actions[bot]` no `main`.
 
 Desde a `v0.1.6` os anexos têm nome por aparelho:
 
 | Anexo | O que é |
 | --- | --- |
-| `giochi-powkiddy-x55-0.1.8.img.xz` | cartão SD do X55, 46 MB, 2 GiB descomprimido |
-| `giochi-qemu-aarch64-0.1.8.img.xz` | disco da VM, 15 MB |
-| `giochi-qemu-aarch64-0.1.8-Image.xz` | kernel da VM, 3,7 MB |
+| `giochi-powkiddy-x55-0.1.9.img.xz` | cartão SD do X55, 46 MB, 2 GiB descomprimido |
+| `giochi-qemu-aarch64-0.1.9.img.xz` | disco da VM, 15 MB |
+| `giochi-qemu-aarch64-0.1.9-Image.xz` | kernel da VM, 3,7 MB |
 | `<aparelho>-SHA256SUMS` | checksum daquele aparelho |
 | `<aparelho>-README.txt` | instruções daquele aparelho |
 
@@ -341,7 +341,7 @@ respondem 200.
 
 As releases `v0.1.1`, `v0.1.2` e `v0.1.7` estão incompletas — anteriores às
 correções de §7.7 e §7.9. A `v0.1.7`, em particular, publicou os arquivos e
-falhou ao gerar a página. Use a `v0.1.8` ou mais nova.
+falhou ao gerar a página. Use a `v0.1.9` ou mais nova.
 
 **O site está no ar.** `https://xtrempkch-droid.github.io/GIOCHI-OS/` serve o
 `index.html` da raiz — conferido com `curl`: 200 e os sete links de download da
