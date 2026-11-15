@@ -196,6 +196,25 @@ jobs:
           repository: ${{ env.APP_REPO }}
           path: .deps/app
           token: ${{ env.GH_TOKEN }}
+          # O catálogo é um punhado de arquivos por app; o repositório tem
+          # ~5,8 GB de `target/` de Rust versionado. Materializar tudo isso
+          # consome o disco do runner antes do empacotamento começar.
+          #
+          # Os padrões abaixo são exatamente o que `apps.mjs` lê — `apps.json`,
+          # `metadata.json`, `forge.json`, `capa.png`, `bin/` e `assets/` — e
+          # foram conferidos contra a árvore commitada: 39 de 39 arquivos, sem
+          # sobra. `capa.png` e `bin/` são lidos pelo validador, então um
+          # padrão errado falha com erro, não em silêncio.
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            /app/apps.json
+            /app/*/metadata.json
+            /app/*/forge.json
+            /app/*/capa.png
+            /app/*/bin/
+            /app/*/assets/
+          sparse-checkout-cone-mode: false
 
       - name: Checkout dos jogos
         # O repositório de jogos é o terceiro catálogo. Ele pode estar em
@@ -213,6 +232,38 @@ jobs:
           repository: ${{ env.GAMES_REPO }}
           path: .deps/games
           token: ${{ env.GH_TOKEN }}
+          # Mesmo recorte, mesmo motivo, e maior: são ~9 GB no checkout
+          # completo (`target/` e `vendor/` de quatro jogos Rust). Conferido
+          # contra a árvore commitada: 66 de 66 arquivos do catálogo.
+          #
+          # `assets/` entra aqui porque a fase `apps` passou a copiá-lo para a
+          # imagem — sem esta linha o jogo iria para o cartão sem textura.
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            /*/metadata.json
+            /*/forge.json
+            /*/capa.png
+            /*/bin/
+            /*/assets/
+          sparse-checkout-cone-mode: false
+
+      - name: Conferir o recorte do catálogo de jogos
+        # O recorte é uma afirmação sobre o repositório: "o catálogo está
+        # nestes caminhos". Se o repositório mudar de forma, a afirmação fica
+        # falsa e o `continue-on-error` acima transformaria a perda em "sem
+        # jogos" — release verde, site bonito, cartão sem jogo. Aqui a perda
+        # vira erro.
+        if: env.GAMES_REPO != '-' && steps.games.outcome == 'success'
+        run: |
+          set -euo pipefail
+          N=$(find .deps/games -mindepth 2 -maxdepth 2 -name metadata.json | wc -l)
+          echo "jogos com metadata.json: $N"
+          if [ "$N" -eq 0 ]; then
+            echo "::error::o checkout dos jogos não trouxe nenhum metadata.json — o recorte do sparse-checkout não casou com o repositório"
+            exit 1
+          fi
+          find .deps/games -mindepth 1 -maxdepth 1 -type d -printf '  %f\n' | sort
 
       - name: Baixar os artefatos do sistema
         uses: actions/download-artifact@v4
@@ -297,20 +348,36 @@ jobs:
       - name: Gerar o site
         run: node scripts/build-site.mjs --dist dist
 
+      - name: Desdobrar os nomes que se repetem entre aparelhos
+        # Os anexos de uma release são PLANOS: `dist/<device>/SHA256SUMS` de um
+        # aparelho sobrescreve o do outro. Medido na v0.1.1 — o `SHA256SUMS`
+        # publicado tinha só a linha do X55, e quem baixasse o disco do QEMU
+        # rodava `sha256sum -c` contra um nome que não existia. O mesmo valia
+        # para `README.txt` e `release.json`.
+        #
+        # A lógica está em `scripts/lib/release-assets.mjs` porque ela errou
+        # uma vez: em YAML não daria para testá-la. O CLI também falha se
+        # sobrar qualquer nome-base repetido — a regressão vira erro aqui, não
+        # um anexo perdido na release publicada.
+        run: node scripts/flatten-release.mjs --dist dist
+
       - name: Escrever o texto da release
+        # Depois do desdobramento: cada README já cita o próprio arquivo de
+        # checksum, e é esse texto que vai no corpo da release.
         run: |
           set -euo pipefail
           {
             echo "Giochi OS ${{ needs.discover.outputs.version }}"
             echo
-            for dir in dist/*/; do
-              [ -f "$dir/README.txt" ] || continue
-              cat "$dir/README.txt"
+            for arquivo in dist/*-README.txt; do
+              [ -f "$arquivo" ] || continue
+              cat "$arquivo"
               echo
               echo "---"
               echo
             done
           } > dist/README-RELEASE.md
+          echo "corpo da release: $(wc -l < dist/README-RELEASE.md) linha(s)"
 
       - name: Publicar a release
         uses: softprops/action-gh-release@v2

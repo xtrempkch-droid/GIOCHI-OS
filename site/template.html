@@ -100,12 +100,23 @@
         </div>
         <div class="step">
           <span class="num">2</span>
+          <h3>Descomprima</h3>
+          <pre><code>xz -dk giochi-*.img.xz</code></pre>
+          <p class="muted">
+            O <code>dd</code> grava bytes crus. Apontar para o
+            <code>.xz</code> escreveria o arquivo comprimido no cartão e o
+            aparelho não inicializaria. Zstd: <code>zstd -d</code>; gzip:
+            <code>gunzip -k</code>.
+          </p>
+        </div>
+        <div class="step">
+          <span class="num">3</span>
           <h3>Descubra o dispositivo</h3>
           <pre><code>lsblk</code></pre>
           <p class="muted">O cartão costuma ser <code>/dev/sdX</code> ou <code>/dev/mmcblkX</code>. Confira o tamanho.</p>
         </div>
         <div class="step">
-          <span class="num">3</span>
+          <span class="num">4</span>
           <h3>Grave</h3>
           <pre><code>sudo dd if=giochi-*.img of=/dev/sdX \
   bs=4M conv=fsync status=progress</code></pre>

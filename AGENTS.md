@@ -430,3 +430,55 @@ comparando o que foi publicado com o que devia estar lá.
 Medido depois das correções: QEMU com 6 apps e `e2fsck -fn` status 0; cartão X55
 com 6 apps, `e2fsck -fn` status 0 e tabela de partição intacta (3622 → 3642
 inodes, exatamente os 20 arquivos).
+
+## 7.7 Decisões (15/11/2026, o release que rodou)
+
+A `v0.1.1` foi a primeira execução do `release.yml` que chegou a criar jobs.
+Ela publicou os dois aparelhos — e expôs quatro defeitos que só aparecem
+quando o caminho inteiro roda de verdade.
+
+- **`replace()` não existe nas expressões do Actions.** A matriz dos aparelhos
+  era `fromJSON(format('["{0}"]', replace(...)))`. Função inexistente não falha
+  no job: **invalida o arquivo inteiro**, e o GitHub cria uma execução sem
+  nenhum job, com a mensagem só no HTML da página. Todos os releases anteriores
+  morreram antes do primeiro passo. O JSON da matriz agora sai pronto do
+  `discover`, como output. `tests/pipeline.test.mjs` lê os workflows e recusa
+  qualquer função fora da lista real — e o `validate.yml` roda mesmo quando o
+  `release.yml` está inválido, que é o único jeito de essa falha aparecer num
+  PR em vez de num release.
+- **Anexo de release é plano.** `dist/<device>/SHA256SUMS` de um aparelho
+  sobrescreve o do outro. Medido na `v0.1.1` publicada: o `SHA256SUMS` tinha só
+  a linha do X55, então quem baixava o disco do QEMU rodava `sha256sum -c`
+  contra um nome que não existia no diretório dele. Mesmo problema em
+  `README.txt` (todo mundo lia a instrução do outro aparelho) e
+  `release.json`. `scripts/lib/release-assets.mjs` desdobra os três para
+  `<device>-<nome>`, corrige o `sha256sum -c` citado no README e falha se
+  sobrar qualquer nome-base repetido. A lógica saiu do YAML justamente porque
+  errou uma vez e ali não dava para testar.
+- **O overlay copiava `bin/` inteiro e só `bin/`.** Dois erros opostos: o
+  `.gitkeep` dos jogos ia para dentro do ext4 mesmo não estando no manifesto, e
+  `assets/` (textura, modelo, áudio) ficava de fora — o jogo abria degradado e
+  nada denunciava. Agora a cópia é exatamente `app.files`, e `apps.mjs` inclui
+  `assets/` nessa lista quando existe. É para `current_exe()/../assets` que o
+  binário olha.
+- **Checkout completo de repositório de jogo não cabe no runner.** Os dois
+  repositórios externos versionam `target/` e `vendor/` de Rust: `GIOCHI-GAMES`
+  tem 26 mil arquivos (~9 GB no checkout), `GIOCHI-APP` ~5,8 GB. O `package`
+  agora faz clone parcial (`filter: blob:none`, `fetch-depth: 1`) com
+  `sparse-checkout` só dos caminhos que o catálogo lê. Os padrões foram
+  conferidos contra a árvore **commitada**: 66 de 66 arquivos na games, 39 de
+  39 na app, sem sobra — e há um passo que falha se o recorte dos jogos não
+  trouxer nenhum `metadata.json`, senão o `continue-on-error` transformaria a
+  perda em "release sem jogos, verde".
+- **A release não depende do Pages.** O Pages do repositório está em "Deploy
+  from a branch", e nesse modo `actions/deploy-pages` sempre falha — levando
+  junto a publicação dos artefatos, que é o produto. Agora o `publish` guarda o
+  site no artefato `giochi-os-site` e só tenta o Pages quando
+  `GET /pages` devolve `build_type: workflow`. Com o Pages em `legacy` o job
+  `deploy` é pulado, o site fica no artefato e a release sai.
+
+Estado da publicação depois disso: `v0.1.1` publicada com
+`giochi-powkiddy-x55-0.1.1.img.xz` (46,1 MB), `giochi-qemu-aarch64-0.1.1.img.xz`
+e `-Image.xz`. O que falta para o site ficar no ar é **uma configuração**:
+Settings → Pages → Source: **GitHub Actions**. Sem isso o HTML fica no artefato
+`giochi-os-site`.
