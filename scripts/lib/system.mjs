@@ -6,7 +6,7 @@
 // A verificação importa porque o `SHA256SUMS` é gerado no fim do build, e um
 // arquivo truncado (disco cheio, kill no meio) produz imagem que falha no
 // cartão sem mensagem útil.
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import path from "node:path";
 
 import { isDir, isFile, listDir, readJson, sha256File, sizeOf } from "./fs.mjs";
@@ -51,6 +51,30 @@ export function parseChecksums(text) {
     map.set(match[2].trim(), match[1].toLowerCase());
   }
   return map;
+}
+
+/**
+ * O arquivo começa com uma tabela de partição?
+ *
+ * Toda imagem de disco — MBR ou GPT — traz a assinatura `0x55AA` nos bytes
+ * 510–511 (no GPT ela existe de propósito, no MBR protetor). Um blob de boot
+ * gravado em offset fixo (`idbloader.img`, `u-boot.itb`) não tem.
+ *
+ * Lê 512 bytes, não o arquivo: a checagem precisa ser barata porque acontece
+ * sobre candidatos de 2 GiB.
+ */
+function hasPartitionTable(filePath) {
+  let fd;
+  try {
+    fd = openSync(filePath, "r");
+    const header = Buffer.alloc(512);
+    const lido = readSync(fd, header, 0, 512, 0);
+    return lido === 512 && header[510] === 0x55 && header[511] === 0xaa;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 /**
@@ -130,16 +154,52 @@ export async function inspectSystemBuild(systemDir) {
   // crua tem ~920 MB quase toda de zeros, e a convenção de publicação é entregar
   // o comprimido (~40–90 MB). Filtrar só `.img` faria o empacotamento ignorar o
   // arquivo que existe de verdade.
+  //
+  // O `.img` não é exclusivo de cartão: o RK3566 entrega `idbloader.img` na mesma
+  // pasta, e uma build pode ter os dois. Chamar o blob de boot de "cartão" daria
+  // um download de 178 KB que não inicializa nada. Tamanho resolve este caso,
+  // mas não prova nada — a diferença é factual: **cartão tem tabela de
+  // partição** (0x55AA em 510), blob de boot não.
+  //
+  // `device.json#artifacts` NÃO serve para isso: ele diz o que subir, e em
+  // `generic-x64`, `powkiddy-x35s` e `steamdeck` o cartão está lá (`disk.img`,
+  // `sdcard.img`, `*.img`). Excluir por ele apagaria o próprio cartão.
   const images = [];
   for (const entry of listDir(systemDir)) {
     if (!IMAGE_PATTERN.test(entry)) continue;
     const full = path.join(systemDir, entry);
     if (!isFile(full)) continue;
+    const compressed = /\.(xz|gz|zst)$/i.test(entry);
     images.push({
       name: entry,
       sizeBytes: sizeOf(full),
       path: full,
-      compressed: /\.(xz|gz|zst)$/i.test(entry),
+      compressed,
+      // Comprimido não dá para espiar sem descomprimir 2 GiB: fica `null`
+      // (desconhecido) em vez de `false`, que seria mentira.
+      hasPartitionTable: compressed ? null : hasPartitionTable(full),
+    });
+  }
+
+  // Só descarta candidato quando a evidência é positiva para outro: pelo menos
+  // um tem tabela de partição. Se nenhum tem (cartão cru renomeado, por
+  // exemplo), todos continuam e a heurística de tamanho decide.
+  //
+  // `null` (comprimido, não inspecionado) NUNCA é descartado: `card.img` +
+  // `card.img.xz` na mesma pasta é o formato de publicação, e o comprimido é o
+  // que deve ser publicado. Descartar o desconhecido apagaria o bom.
+  const comTabela = images.filter((image) => image.hasPartitionTable === true);
+  const candidatos =
+    comTabela.length > 0
+      ? images.filter((image) => image.hasPartitionTable !== false)
+      : images;
+  for (const image of images) {
+    if (candidatos.includes(image)) continue;
+    warnings.push({
+      code: "componente_de_boot",
+      message:
+        `${image.name} casa com a extensão de imagem mas não tem tabela de partição; ` +
+        "tratado como componente do boot, não como cartão",
     });
   }
 
@@ -158,7 +218,7 @@ export async function inspectSystemBuild(systemDir) {
     }
   }
 
-  if (images.length === 0 && !(kernel && rootfs)) {
+  if (candidatos.length === 0 && !(kernel && rootfs)) {
     warnings.push({
       code: "sem_imagem",
       message:
@@ -172,7 +232,7 @@ export async function inspectSystemBuild(systemDir) {
     device,
     deviceId: String(device?.id || path.basename(path.resolve(systemDir))),
     virtual: isVirtualDevice(device, systemDir),
-    images,
+    images: candidatos,
     kernel,
     rootfs,
     checksums,

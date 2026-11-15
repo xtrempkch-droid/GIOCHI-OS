@@ -13,9 +13,12 @@ Giochi System, app é do Giochi app.
 
 ## Independência entre repositórios
 
-Nada é importado do Giochi System nem do Giochi app. O caminho das pastas entra
-por argumento, e o único acoplamento é o **contrato em JSON** (`apps.json`,
-`device.json`, `release.json`).
+Nada é importado do Giochi System, do Giochi app nem do Giochi games. O caminho
+das pastas entra por argumento, e o único acoplamento é o **contrato em JSON**
+(`apps.json`, `metadata.json`, `device.json`, `release.json`). O catálogo de
+jogos nem `apps.json` tem: a lista é derivada das pastas de jogo.
 
-Isso é deliberado: os três repositórios são independentes, e um não pode quebrar
-porque o outro mudou de estrutura interna.
+Isso é deliberado: os repositórios são independentes, e um não pode quebrar
+porque o outro mudou de estrutura interna. No `release.yml` isso é explícito: o
+checkout dos jogos é `continue-on-error`, e um catálogo que não carrega vira
+aviso — a imagem sai com os apps que existem.

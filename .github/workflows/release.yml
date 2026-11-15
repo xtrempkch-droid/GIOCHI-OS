@@ -43,6 +43,11 @@ on:
         required: false
         default: "xtrempkch-droid/GIOCHI-APP"
         type: string
+      games_repo:
+        description: "Repositório dos jogos (vazio = padrão; use '-' para não usar)"
+        required: false
+        default: "xtrempkch-droid/GIOCHI-GAMES"
+        type: string
   push:
     tags:
       - "v*"
@@ -60,6 +65,7 @@ concurrency:
 env:
   SYSTEM_REPO: ${{ inputs.system_repo || 'xtrempkch-droid/GIOCHI-SYSTEM' }}
   APP_REPO: ${{ inputs.app_repo || 'xtrempkch-droid/GIOCHI-APP' }}
+  GAMES_REPO: ${{ inputs.games_repo || 'xtrempkch-droid/GIOCHI-GAMES' }}
   GH_TOKEN: ${{ secrets.SYSTEM_TOKEN || secrets.GITHUB_TOKEN }}
 
 jobs:
@@ -183,6 +189,23 @@ jobs:
           path: .deps/app
           token: ${{ env.GH_TOKEN }}
 
+      - name: Checkout dos jogos
+        # O repositório de jogos é o terceiro catálogo. Ele pode estar em
+        # estruturação — jogo sem `bin/` exportado, ou repositório vazio — e
+        # nada disso pode derrubar o release do sistema: um catálogo que não
+        # carrega vira aviso, e a imagem sai com os apps que existem.
+        #
+        # Vale o mesmo para o repositório privado que o token não alcança: o
+        # `continue-on-error` transforma "sem acesso" em "sem jogos".
+        if: env.GAMES_REPO != '-'
+        continue-on-error: true
+        id: games
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GAMES_REPO }}
+          path: .deps/games
+          token: ${{ env.GH_TOKEN }}
+
       - name: Baixar os artefatos do sistema
         uses: actions/download-artifact@v4
         with:
@@ -199,9 +222,21 @@ jobs:
           # eles. A injeção escreve sem montar — no alvo virtual direto no
           # ext4, no cartão extraindo a partição, alterando, conferindo com
           # `e2fsck` e devolvendo ao offset.
+          #
+          # Os catálogos são independentes: o launcher e a loja vêm do Giochi
+          # app, os jogos vêm do repositório de jogos. `--apps` é repetível
+          # justamente para não obrigar a copiar pasta de um repositório para
+          # o outro.
+          apps=(--apps .deps/app/app)
+          if [ -d .deps/games ] && [ -n "$(ls -A .deps/games 2>/dev/null)" ]; then
+            apps+=(--apps .deps/games)
+          else
+            echo "::warning::catálogo de jogos vazio ou inacessível; a imagem sai só com os apps"
+          fi
+
           node scripts/assemble.mjs package \
             --system .deps/system \
-            --apps .deps/app/app \
+            "${apps[@]}" \
             --out "dist/${{ matrix.device }}" \
             --version "${{ needs.discover.outputs.version }}" \
             --compress xz \

@@ -107,6 +107,20 @@ forma.
 Campos usados aqui: `id`, `folder`, `status`, `distribution`. A licença vem do
 `metadata.json` de cada app.
 
+### Entrada — catálogo de jogos (`GIOCHI-GAMES`)
+
+Não tem `apps.json` e não tem nível `app/`: cada jogo é uma pasta de primeiro
+nível com `metadata.json`, `forge.json`, `bin/<entrypoint>` e `capa.png`. A
+lista é **derivada** das pastas (ver `lerCatalogo` em `scripts/lib/apps.mjs`):
+
+| Campo | Origem |
+| --- | --- |
+| `id` | `metadata.slug` → nome da pasta |
+| `status` | `ready` se `bin/` tem conteúdo, senão `scaffold` (pulado, não erro) |
+| `distribution` | `metadata.distribution` → `forge.json.distribution` → `image` |
+
+Se a raiz tiver `apps.json`, ele manda e a derivação não acontece.
+
 ### Entrada — `Giochi System/out/<device>/`
 
 Exige `device.json`, `build-info.txt`, `SHA256SUMS` e **um** dos dois:
@@ -134,6 +148,12 @@ node scripts/assemble.mjs package \
   --system ../"Giochi System"/out/qemu-aarch64 \
   --apps ../"Giochi app"/app --out dist --version 0.1.0 --compress xz
 
+# com os jogos, que vivem em repositório próprio
+node scripts/assemble.mjs package \
+  --system ../"Giochi System"/out/powkiddy-x55 \
+  --apps ../GIOCHI-APP/app --apps ../GIOCHI-GAMES \
+  --out dist --version 0.1.1 --compress xz --inject-apps
+
 node scripts/build-site.mjs --dist dist
 ```
 
@@ -149,7 +169,9 @@ Não use `node --test tests/`: spawna um processo por arquivo e falha com
   acontece: disco cheio no meio de um `copyFileSync` produz arquivo truncado sem
   erro. Só o recálculo sobre a cópia prova o que será publicado.
 - **Maior imagem quando há várias.** Kernel e rootfs avulsos são menores que a
-  imagem completa do cartão; pegar a maior é a heurística que acerta.
+  imagem completa do cartão; pegar a maior é a heurística que acerta. Mas `.img`
+  não é sinônimo de cartão: o RK3566 entrega `idbloader.img` na mesma pasta, e
+  tamanho só não prova nada. Ver §7.5.
 - **Regra de licença duplicada aqui.** O validador do Giochi app já recusa GPL em
   `image`, mas o empacotamento não pode depender de outro repositório ter rodado
   o validador antes.
@@ -352,3 +374,30 @@ Git. O `.gitignore` cobre isso.
   habilitados em `device/devices.json`, empacota em matriz e publica o site uma
   vez. Publicar um device por execução sobrescreveria o Pages com uma página de
   um card.
+
+## 7.5 Decisões (15/11/2026, terceiro repositório)
+
+- **O catálogo de jogos é derivado, não declarado.** `GIOCHI-GAMES` não tem
+  `apps.json` e não tem nível `app/`: cada jogo é uma pasta de primeiro nível com
+  `metadata.json`, `forge.json`, `bin/` e `capa.png`. Derivar das pastas evita
+  copiar pasta de jogo para o catálogo do Giochi app. `id` vem de
+  `metadata.slug`; `status` é `ready` se `bin/` tem conteúdo e `scaffold` se
+  não — e `scaffold` é **pulado com aviso, nunca erro**, porque o repositório
+  ainda está em estruturação. Toda execução avisa `catalogo_derivado`. Um
+  `apps.json` presente manda e silencia o aviso: a derivação é plano B.
+- **Só o primeiro nível é varrido.** `target/`, `vendor/` e `crates/` existem
+  nos repositórios de jogo e não são apps.
+- **`.img` não é sinônimo de cartão.** O RK3566 entrega `idbloader.img` na mesma
+  pasta da imagem do cartão; publicar o blob de 178 KB daria um download que não
+  inicializa nada. O sinal usado é factual: **cartão tem tabela de partição**
+  (`0x55AA` nos bytes 510–511), bootstrap gravado em offset fixo não. Quando
+  nenhum candidato tem tabela, nenhum é descartado e a heurística de tamanho
+  decide (cartão cru renomeado continua aceito).
+- **`device.json#artifacts` NÃO serve para separar cartão de componente.** O
+  campo diz o que subir, e em `generic-x64`, `powkiddy-x35s` e `steamdeck` o
+  próprio cartão está lá (`disk.img`, `sdcard.img`, `*.img`). Excluir por ele
+  apagaria o cartão desses três aparelhos. Há teste fixando isso.
+- **O workflow não deixa o repositório de jogos derrubar o release.** O checkout
+  dele é `continue-on-error` e o catálogo só entra em `--apps` quando a pasta
+  tem conteúdo; sem jogos a imagem sai com os apps e um `::warning::` explica.
+  `games_repo` aceita `-` para desligar de vez.

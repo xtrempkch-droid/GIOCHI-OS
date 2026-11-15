@@ -113,8 +113,17 @@ function makeRegistry(appsRoot, entries) {
   );
 }
 
-function makeSystemOutput(dir, { imageName = "test.img", tamper = false } = {}) {
-  const image = Buffer.from("imagem de teste do cartao");
+function makeSystemOutput(dir, { imageName = "test.img", tamper = false, partitionTable = false } = {}) {
+  // `partitionTable` escreve a assinatura 0x55AA em 510, que é o que separa um
+  // disco de um blob de boot. Sem ela, o arquivo é "uma imagem sem tabela" — o
+  // que continua sendo aceito, por queda.
+  let image = Buffer.from("imagem de teste do cartao");
+  if (partitionTable) {
+    image = Buffer.alloc(1024, 0);
+    image.write("IMAGEM DE TESTE", 0, "ascii");
+    image[510] = 0x55;
+    image[511] = 0xaa;
+  }
   write(path.join(dir, imageName), image);
   write(
     path.join(dir, "device.json"),
@@ -261,6 +270,84 @@ test("inspectSystemBuild recusa pasta inexistente", async () => {
   const result = await inspectSystemBuild(path.join(os.tmpdir(), "nao-existe-giochi"));
   assert.equal(result.ok, false);
   assert.equal(result.errors[0].code, "pasta_ausente");
+});
+
+// ── componente de boot × cartão ─────────────────────────────
+//
+// `.img` não é sinônimo de cartão: o RK3566 entrega `idbloader.img` na mesma
+// pasta da imagem. Publicar o blob como se fosse o cartão daria um download que
+// não inicializa nada.
+
+test("inspectSystemBuild não confunde idbloader.img com o cartão", async () => {
+  await withTempDirAsync(async (dir) => {
+    const { imageName, image } = makeSystemOutput(dir, { partitionTable: true });
+    // Componente de boot: 182 KB de código em offset fixo, sem tabela.
+    const blob = Buffer.alloc(4096, 0xab);
+    write(path.join(dir, "idbloader.img"), blob);
+    write(
+      path.join(dir, "SHA256SUMS"),
+      `${sha256(image)}  ${imageName}\n${sha256(blob)}  idbloader.img\n`,
+    );
+
+    const result = await inspectSystemBuild(dir);
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.deepEqual(result.images.map((i) => i.name), [imageName]);
+    assert.ok(
+      result.warnings.some((w) => w.code === "componente_de_boot" && /idbloader\.img/.test(w.message)),
+      JSON.stringify(result.warnings),
+    );
+  });
+});
+
+test("inspectSystemBuild aceita imagem sem tabela de partição (queda)", async () => {
+  // Cartão cru renomeado, ou imagem montada sem MBR: nenhum candidato tem
+  // tabela, então nenhum é descartado e a heurística de tamanho decide.
+  await withTempDirAsync(async (dir) => {
+    makeSystemOutput(dir);
+    write(path.join(dir, "outro.img"), Buffer.from("sem tabela tambem"));
+    const result = await inspectSystemBuild(dir);
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.images.length, 2);
+    assert.equal(result.warnings.some((w) => w.code === "componente_de_boot"), false);
+  });
+});
+
+test("inspectSystemBuild mantém o comprimido quando o cru também existe", async () => {
+  // `card.img` + `card.img.xz` é o formato de publicação, e o comprimido é o
+  // que deve sair. Ele não dá para inspecionar sem descomprimir 2 GiB, então
+  // fica como desconhecido — e desconhecido não é descartado.
+  await withTempDirAsync(async (dir) => {
+    const { image, imageName } = makeSystemOutput(dir, { imageName: "card.img", partitionTable: true });
+    const gz = Buffer.from("comprimido de mentira");
+    write(path.join(dir, "card.img.gz"), gz);
+    write(
+      path.join(dir, "SHA256SUMS"),
+      `${sha256(image)}  ${imageName}\n${sha256(gz)}  card.img.gz\n`,
+    );
+
+    const result = await inspectSystemBuild(dir);
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.deepEqual(result.images.map((i) => i.name).sort(), ["card.img", "card.img.gz"]);
+    assert.equal(result.images.find((i) => i.name === "card.img.gz").hasPartitionTable, null);
+    assert.equal(result.warnings.some((w) => w.code === "componente_de_boot"), false);
+  });
+});
+
+test("inspectSystemBuild não descarta o cartão declarado em artifacts", async () => {
+  // `generic-x64`, `powkiddy-x35s` e `steamdeck` declaram o PRÓPRIO cartão em
+  // `artifacts` (`disk.img`, `sdcard.img`, `*.img`). Excluir por esse campo —
+  // que só diz o que subir — apagaria o cartão desses três aparelhos.
+  await withTempDirAsync(async (dir) => {
+    const { imageName } = makeSystemOutput(dir, { imageName: "sdcard.img", partitionTable: true });
+    write(
+      path.join(dir, "device.json"),
+      JSON.stringify({ id: "powkiddy-x35s", artifacts: ["sdcard.img", "Image", "rootfs.ext4", "*.img"] }),
+    );
+
+    const result = await inspectSystemBuild(dir);
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.deepEqual(result.images.map((i) => i.name), [imageName]);
+  });
 });
 
 // ── fase 1: overlay ──────────────────────────────────────────
@@ -1254,6 +1341,140 @@ test("site de cartão cru não mostra aviso de descompressão", async () => {
     });
     const html = readFileSync(result.indexPath, "utf8");
     assert.doesNotMatch(html, /Descomprima antes de gravar/);
+  });
+});
+
+// ── catálogo derivado (repositório de jogos sem apps.json) ──
+
+/**
+ * Repositório de jogo como o GIOCHI-GAMES é de verdade: a pasta do jogo tem
+ * `metadata.json` + `bin/` e o repositório NÃO tem `apps.json`. O `makeApp`
+ * acima já escreve exatamente esses arquivos, então derivar é só não chamar
+ * `makeRegistry`.
+ */
+function makeJogo(gamesRoot, { folder, slug, binEmpty = false, metadata = {}, forge = null }) {
+  const dir = path.join(gamesRoot, folder);
+  write(
+    path.join(dir, "metadata.json"),
+    JSON.stringify(
+      {
+        title: folder,
+        developer: "Teste",
+        version: "1.0.0",
+        arch: "aarch64",
+        runtime: "native",
+        entrypoint: "bin/jogo",
+        license: "Proprietary",
+        ...metadata,
+        ...(slug === undefined ? {} : { slug }),
+      },
+      null,
+      2,
+    ),
+  );
+  if (!binEmpty) write(path.join(dir, "bin", "jogo"), "#!/bin/sh\necho jogo\n");
+  write(path.join(dir, "capa.png"), fakePng(320, 320));
+  if (forge) write(path.join(dir, "forge.json"), JSON.stringify(forge, null, 2));
+  return dir;
+}
+
+test("catálogo derivado: pastas com metadata.json viram apps sem apps.json", async () => {
+  // O contrato é um `apps.json`, mas o repositório de jogos nasceu sem ele.
+  // Derivar as pastas é o que permite embutir jogo sem copiar pasta para o
+  // catálogo do Giochi app.
+  await withTempDirAsync(async (dir) => {
+    const gamesRoot = path.join(dir, "games");
+    makeJogo(gamesRoot, { folder: "cobrinha" });
+    makeJogo(gamesRoot, { folder: "neon-drift" });
+
+    const resultado = await loadApps(gamesRoot);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.embedded.map((a) => a.id).sort(), ["cobrinha", "neon-drift"]);
+    assert.ok(
+      resultado.warnings.some((w) => w.code === "catalogo_derivado"),
+      JSON.stringify(resultado.warnings),
+    );
+  });
+});
+
+test("catálogo derivado: apps.json presente continua mandando", async () => {
+  // A derivação é um plano B. Com `apps.json` no lugar, o arquivo decide —
+  // inclusive para deixar uma pasta de fora.
+  await withTempDirAsync(async (dir) => {
+    makeJogo(dir, { folder: "cobrinha" });
+    makeJogo(dir, { folder: "experimento" });
+    makeRegistry(dir, [{ id: "cobrinha", status: "ready", distribution: "image" }]);
+
+    const resultado = await loadApps(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.embedded.map((a) => a.id), ["cobrinha"]);
+    assert.equal(
+      resultado.warnings.some((w) => w.code === "catalogo_derivado"),
+      false,
+    );
+  });
+});
+
+test("catálogo derivado: só o primeiro nível é varrido", async () => {
+  // `target/`, `vendor/` e `crates/` existem nos repositórios de jogo e não são
+  // apps. Sem a regra de um nível, o build acharia app dentro de cache.
+  await withTempDirAsync(async (dir) => {
+    makeJogo(dir, { folder: "cobrinha" });
+    makeJogo(path.join(dir, "target"), { folder: "release" });
+
+    const resultado = await loadApps(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.embedded.map((a) => a.id), ["cobrinha"]);
+  });
+});
+
+test("catálogo derivado: pasta sem bin/ é scaffold e é pulada", async () => {
+  // "ainda em fase de estruturação" não pode derrubar o release: o jogo sem
+  // binário exportado é pulado com aviso, não é erro.
+  await withTempDirAsync(async (dir) => {
+    makeJogo(dir, { folder: "pronto" });
+    makeJogo(dir, { folder: "rascunho", binEmpty: true });
+
+    const resultado = await loadApps(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.embedded.map((a) => a.id), ["pronto"]);
+    assert.deepEqual(resultado.skipped.map((s) => s.id), ["rascunho"]);
+    assert.match(resultado.skipped[0].reason, /scaffold/);
+  });
+});
+
+test("catálogo derivado: metadata.slug vira o id do app", async () => {
+  // O id vira nome de pasta em `/opt/giochi/apps/<id>`. O `slug` é o nome
+  // estável que o jogo escolheu; a pasta é detalhe de organização.
+  await withTempDirAsync(async (dir) => {
+    makeJogo(dir, { folder: "Giochi Defender", slug: "giochi-defender" });
+
+    const resultado = await loadApps(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.embedded.map((a) => a.id), ["giochi-defender"]);
+    assert.equal(resultado.embedded[0].folder, "Giochi Defender");
+  });
+});
+
+test("catálogo derivado: forge.json decide a distribuição quando metadata omite", async () => {
+  await withTempDirAsync(async (dir) => {
+    makeJogo(dir, { folder: "loja", forge: { distribution: "store" } });
+
+    const resultado = await loadApps(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.external.map((a) => a.id), ["loja"]);
+  });
+});
+
+test("catálogo derivado: sem apps.json e sem pasta nenhuma não é erro", async () => {
+  // O repositório de jogos pode estar vazio enquanto está sendo estruturado.
+  await withTempDirAsync(async (dir) => {
+    mkdirSync(path.join(dir, "target"), { recursive: true });
+
+    const resultado = await loadApps(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.embedded, []);
+    assert.ok(resultado.warnings.some((w) => w.code === "catalogo_vazio"));
   });
 });
 

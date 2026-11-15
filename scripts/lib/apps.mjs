@@ -31,6 +31,107 @@ function hasContent(dirPath) {
 }
 
 /**
+ * Lê o catálogo de uma raiz, explícito ou derivado das pastas.
+ *
+ * ## Por que existe o modo derivado
+ *
+ * O contrato do projeto é um `apps.json` declarando cada app. O repositório de
+ * jogos nasceu antes disso: tem `<jogo>/metadata.json` + `bin/` e mais nada, o
+ * que é exatamente o formato que a fase `image` exige — só falta a lista.
+ *
+ * Recusar esse repositório obrigaria a copiar pasta de jogo para o catálogo do
+ * Giochi app, que é o acoplamento que o contrato existe para evitar. Então:
+ *
+ * - `apps.json` presente  → ele MANDA (é o contrato);
+ * - `apps.json` ausente   → varre os subdiretórios de um nível que tenham
+ *   `metadata.json` e monta a lista, avisando que derivou.
+ *
+ * O derivado tem regras conservadoras:
+ *
+ * - `distribution`: `metadata.distribution` → `forge.json.distribution` →
+ *   `"image"`. O default é `image` porque o diretório só chega aqui com `bin/`
+ *   e `capa.png` no formato que a fase `image` valida; um app de loja não
+ *   precisa de nada disso.
+ * - `status`: `ready` quando `bin/` tem conteúdo, `scaffold` quando está vazio
+ *   ou ausente — e `scaffold` é PULADO com aviso, nunca reprova o build.
+ * - `id`: `metadata.slug` → nome da pasta.
+ *
+ * Erro de graça não existe: um `metadata.json` inválido em pasta descoberta
+ * vira erro, porque publicar uma imagem com app pela metade é pior.
+ */
+function lerCatalogo(appsRoot) {
+  const warnings = [];
+  const indexPath = path.join(appsRoot, "apps.json");
+
+  if (isFile(indexPath)) {
+    try {
+      const index = readJson(indexPath, "apps.json");
+      return {
+        ok: true,
+        entries: Array.isArray(index.apps) ? index.apps : [],
+        warnings,
+      };
+    } catch (error) {
+      return { ok: false, entries: [], errors: [{ code: "indice_invalido", message: error.message }], warnings };
+    }
+  }
+
+  // Modo derivado: só pastas de PRIMEIRO nível, o que evita `target/`, `vendor/`
+  // e `crates/` — que existem nos repositórios de jogo e não são apps.
+  const entries = [];
+  for (const nome of listDir(appsRoot)) {
+    const pasta = path.join(appsRoot, nome);
+    if (!isDir(pasta)) continue;
+    const metadataPath = path.join(pasta, "metadata.json");
+    if (!isFile(metadataPath)) continue;
+
+    let metadata;
+    try {
+      metadata = readJson(metadataPath, `${nome}/metadata.json`);
+    } catch (error) {
+      return {
+        ok: false,
+        entries: [],
+        errors: [{ code: "metadata_invalido", message: `${nome}: ${error.message}` }],
+        warnings,
+      };
+    }
+
+    let forge = null;
+    const forgePath = path.join(pasta, "forge.json");
+    if (isFile(forgePath)) {
+      try {
+        forge = readJson(forgePath, `${nome}/forge.json`);
+      } catch {
+        // `forge.json` é declaração de REQUISITOS, não de distribuição: um
+        // arquivo quebrado não impede embutir o app, e a fase `image` não o lê.
+        forge = null;
+      }
+    }
+
+    entries.push({
+      id: String(metadata.slug || nome),
+      folder: nome,
+      runtime: String(metadata.runtime || "native"),
+      status: hasContent(path.join(pasta, "bin")) ? "ready" : "scaffold",
+      distribution: String(metadata.distribution || forge?.distribution || "image"),
+      license: String(metadata.license || ""),
+    });
+  }
+
+  if (entries.length > 0) {
+    warnings.push({
+      code: "catalogo_derivado",
+      message:
+        `${appsRoot} não tem apps.json; o catálogo foi derivado de ${entries.length} ` +
+        "pasta(s) com metadata.json. Declare um apps.json para fixar status e distribuição",
+    });
+  }
+
+  return { ok: true, entries, warnings };
+}
+
+/**
  * Carrega e classifica os apps.
  *
  * `image`  — entra na imagem assinada; precisa estar completo.
@@ -45,35 +146,22 @@ export async function loadApps(appsRoot) {
   const external = [];
   const skipped = [];
 
-  const indexPath = path.join(appsRoot, "apps.json");
-  if (!isFile(indexPath)) {
+  const catalogo = lerCatalogo(appsRoot);
+  if (!catalogo.ok) {
     return {
       ok: false,
       embedded,
       external,
       skipped,
-      errors: [{ code: "indice_ausente", message: `apps.json não encontrado em ${appsRoot}` }],
+      errors: catalogo.errors,
       warnings,
     };
   }
+  warnings.push(...catalogo.warnings);
 
-  let index;
-  try {
-    index = readJson(indexPath, "apps.json");
-  } catch (error) {
-    return {
-      ok: false,
-      embedded,
-      external,
-      skipped,
-      errors: [{ code: "indice_invalido", message: error.message }],
-      warnings,
-    };
-  }
-
-  const entries = Array.isArray(index.apps) ? index.apps : [];
+  const entries = catalogo.entries;
   if (entries.length === 0) {
-    warnings.push({ code: "catalogo_vazio", message: "apps.json não declara nenhum app" });
+    warnings.push({ code: "catalogo_vazio", message: `${appsRoot} não declara nenhum app` });
   }
 
   for (const entry of entries) {
@@ -233,9 +321,10 @@ export async function loadApps(appsRoot) {
  * isto, embutir um jogo exigiria copiar a pasta dele para o catálogo do outro
  * repositório — que é exatamente o acoplamento que o contrato evita.
  *
- * Cada raiz precisa ter o seu `apps.json`. As classificações (`embedded`,
- * `external`, `skipped`) são concatenadas, e a versão de cada app vem do
- * `metadata.json` da própria pasta, não do índice.
+ * Cada raiz vem do `loadApps`, então aceita as duas formas: `apps.json`
+ * declarado ou catálogo derivado das pastas (ver `lerCatalogo`). As
+ * classificações (`embedded`, `external`, `skipped`) são concatenadas, e a
+ * versão de cada app vem do `metadata.json` da própria pasta, não do índice.
  *
  * `id` repetido entre catálogos é ERRO, não "o último vence": dois apps com o
  * mesmo id escreveriam em `/opt/giochi/apps/<id>` e um apagaria o outro — com

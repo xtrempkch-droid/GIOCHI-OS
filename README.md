@@ -9,16 +9,17 @@ A **junção** e a **publicação** do projeto Giochi. Duas funções, uma pasta
 
 | Repositório | Função |
 | --- | --- |
-| Giochi System | Cria o Linux limpo: kernel, rootfs, boot, drivers, painel |
-| Giochi app | Apps e jogos, cada um com seu manifesto de requisitos |
-| **Giochi os** (este) | Junta os dois e publica a imagem + o site |
+| [Giochi System](https://github.com/xtrempkch-droid/GIOCHI-SYSTEM) | Cria o Linux limpo: kernel, rootfs, boot, drivers, painel |
+| [Giochi app](https://github.com/xtrempkch-droid/GIOCHI-APP) | Launcher, loja e apps, com manifesto de requisitos |
+| [Giochi games](https://github.com/xtrempkch-droid/GIOCHI-GAMES) | Os jogos, cada um numa pasta com `metadata.json` |
+| **Giochi os** (este) | Junta os três e publica a imagem + o site |
 
 ## Como funciona a junção
 
 Duas fases, porque a ordem importa e cada uma roda em lugar diferente.
 
 ```text
-   Giochi app/app/
+   Giochi app/app/  +  Giochi games/
         │
         │  fase 1: apps  (ANTES do build)
         ▼
@@ -45,8 +46,14 @@ o Giochi System precisa do overlay para gerar a imagem.
 ```bash
 node scripts/assemble.mjs apps \
   --apps ../"Giochi app"/app \
+  --apps ../GIOCHI-GAMES \
   --out ../staging
 ```
+
+`--apps` é repetível (ou uma vírgula) porque os catálogos são independentes: o
+launcher e a loja vêm do Giochi app, os jogos vêm do repositório deles. O
+repositório de jogos não precisa de `apps.json` — a lista é derivada das pastas,
+e jogo sem `bin/` exportado é pulado com aviso.
 
 Produz:
 
@@ -126,11 +133,11 @@ Detalhes em [docs/site.md](docs/site.md).
 ## Comandos
 
 ```bash
-node tests/run-all.mjs                              # 51 testes
+node tests/run-all.mjs                              # 61 testes
 node scripts/assemble.mjs apps --apps <app/> --out <staging>            # um catálogo
 node scripts/assemble.mjs apps --apps <app/>,<jogos/> --out <staging>   # dois
-node scripts/assemble.mjs package --system <out/device> --apps <app/> --out dist \
-  --version 0.1.0 --compress xz
+node scripts/assemble.mjs package --system <out/device> --apps <app/> --apps <jogos/> \
+  --out dist --version 0.1.1 --compress xz --inject-apps
 node scripts/build-site.mjs --dist dist
 ```
 

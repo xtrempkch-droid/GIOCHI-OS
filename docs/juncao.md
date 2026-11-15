@@ -297,20 +297,52 @@ node scripts/assemble.mjs apps --apps ../GIOCHI-APP/app --out staging
 # launcher num repositório, jogos em outro
 node scripts/assemble.mjs apps \
   --apps ../GIOCHI-APP/app \
-  --apps ../GIOCHI-JOGOS/app \
+  --apps ../GIOCHI-GAMES \
   --out staging
 
 # a mesma coisa, numa flag
-node scripts/assemble.mjs apps --apps ../GIOCHI-APP/app,../GIOCHI-JOGOS/app --out staging
+node scripts/assemble.mjs apps --apps ../GIOCHI-APP/app,../GIOCHI-GAMES --out staging
 ```
 
-Cada raiz precisa do seu `apps.json`. Os catálogos são **juntados**: os apps de
-imagem dos dois entram no mesmo overlay, os de loja na mesma lista, e o
-`index.json` sai único.
+Os catálogos são **juntados**: os apps de imagem dos dois entram no mesmo
+overlay, os de loja na mesma lista, e o `index.json` sai único.
 
 `id` repetido entre catálogos é **erro**, não "o último vence": dois apps com o
 mesmo id escreveriam em `/opt/giochi/apps/<id>`, um apagaria o outro, e o
 `index.json` anunciaria os dois.
+
+### Catálogo declarado × catálogo derivado
+
+| Raiz | Forma | Como a lista nasce |
+| --- | --- | --- |
+| `GIOCHI-APP/app` | declarada | `apps.json` lista cada app |
+| `GIOCHI-GAMES` | derivada | varre as pastas de primeiro nível |
+
+O repositório de jogos nasceu sem `apps.json`: cada jogo é uma pasta com
+`metadata.json`, `bin/` e `capa.png`, que é exatamente o formato que a fase
+`image` exige — só falta a lista. Derivar evita copiar pasta de jogo para o
+catálogo do Giochi app, que é o acoplamento que o contrato existe para evitar.
+
+Quando a raiz **não** tem `apps.json`, a lista é montada assim:
+
+| Campo | Origem |
+| --- | --- |
+| `id` | `metadata.slug` → nome da pasta |
+| `folder` | nome da pasta |
+| `status` | `ready` se `bin/` tem conteúdo, senão `scaffold` |
+| `distribution` | `metadata.distribution` → `forge.json.distribution` → `image` |
+
+Três regras que existem para o repositório em estruturação não derrubar o
+release:
+
+- **Só o primeiro nível é varrido.** `target/`, `vendor/` e `crates/` existem
+  nos repositórios de jogo e não são apps.
+- **`scaffold` é pulado com aviso, não é erro.** Jogo sem `bin/` exportado
+  simplesmente não entra na imagem.
+- **Aviso `catalogo_derivado`.** Toda execução avisa que a lista foi deduzida;
+  declarar um `apps.json` silencia e fixa `status`/`distribution`.
+
+Um `apps.json` presente **manda**: a derivação é plano B, não fusão.
 
 ### As duas rotas para um app de outro repositório
 
