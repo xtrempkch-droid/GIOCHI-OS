@@ -1898,26 +1898,33 @@ test("o release publica os artefatos mesmo sem Pages configurado", () => {
   assert.match(fonte, /if:\s*needs\.publish\.outputs\.pages_ready == 'true'/);
 });
 
-test("fase apps leva assets/ para a imagem, junto de bin/", async () => {
-  // Os jogos carregam a arte ao lado do binário (`current_exe()/../assets`).
-  // Sem esta cópia o jogo entrava na imagem e abria sem textura, sem modelo e
-  // sem áudio — degradado, sem nada no manifesto denunciando.
+test("fase apps leva os diretórios de dados do app, e só eles", async () => {
+  // Cada um destes foi descoberto no boot do QEMU, com o app falhando:
+  // `assets/` deixava o jogo sem textura, `config/` fazia o tower morrer com
+  // "não consegui ler config/classes.ron". `target/` e `src/` existem para
+  // desenvolver, não para rodar — e são gigabytes.
   await withTempDirAsync(async (dir) => {
     const root = path.join(dir, "jogos");
-    const appDir = makeJogo(root, { folder: "com-arte" });
+    const appDir = makeJogo(root, { folder: "com-dados" });
     write(path.join(appDir, "assets", "texturas", "chao.bmp"), "BMP");
-    write(path.join(appDir, "assets", "modelos", "torre.obj"), "v 0 0 0");
+    write(path.join(appDir, "config", "classes.ron"), "(classes: [])");
+    write(path.join(appDir, "target", "debug", "build.o"), "lixo");
+    write(path.join(appDir, "src", "main.rs"), "fn main() {}");
+    write(path.join(appDir, "vendor", "serde", "lib.rs"), "//");
 
     const resultado = await runAppsPhase({ appsRoots: [root], outDir: path.join(dir, "out") });
     assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
 
-    const overlay = path.join(dir, "out", "rootfs-overlay", "opt", "giochi", "apps", "com-arte");
+    const overlay = path.join(dir, "out", "rootfs-overlay", "opt", "giochi", "apps", "com-dados");
     assert.equal(isFile(path.join(overlay, "bin", "jogo")), true);
     assert.equal(isFile(path.join(overlay, "assets", "texturas", "chao.bmp")), true);
-    assert.equal(isFile(path.join(overlay, "assets", "modelos", "torre.obj")), true);
+    assert.equal(isFile(path.join(overlay, "config", "classes.ron")), true);
+    assert.equal(isFile(path.join(overlay, "target", "debug", "build.o")), false);
+    assert.equal(isFile(path.join(overlay, "src", "main.rs")), false);
+    assert.equal(isFile(path.join(overlay, "vendor", "serde", "lib.rs")), false);
     assert.deepEqual(
       [...resultado.apps.embedded[0].files].sort(),
-      ["assets/modelos/torre.obj", "assets/texturas/chao.bmp", "bin/jogo"],
+      ["assets/texturas/chao.bmp", "bin/jogo", "config/classes.ron"],
     );
   });
 });

@@ -1,7 +1,7 @@
 # AGENTS.md — Giochi os
 
 > Handoff técnico deste repositório. Leia antes de continuar o trabalho.
-> Atualizado em: 02/11/2026.
+> Atualizado em: 15/11/2026.
 
 ## 1. Objetivo
 
@@ -32,38 +32,48 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
 
 ### Concluído
 
-- Estrutura de repositório pronta para GitHub.
-- `scripts/assemble.mjs` com as duas fases (`apps`, `package`) e `--compress`.
-- `scripts/build-site.mjs` gerando site autocontido.
+- `scripts/assemble.mjs` com as duas fases (`apps`, `package`), `--compress` e
+  `--inject-apps`; `--apps` aceita mais de um catálogo (repetido ou vírgula).
+- `scripts/build-site.mjs` gerando site autocontido, e
+  `scripts/flatten-release.mjs` desdobrando os anexos de vários aparelhos.
 - `scripts/lib/` com os módulos `fs`, `system`, `apps`, `pipeline`, `site`,
-  `compress`, `rootfs`, `qemu` e `names`.
+  `compress`, `rootfs`, `inject`, `qemu`, `names` e `release-assets`.
 - `site/template.html` + `site/assets/style.css`, com card próprio para alvo
   virtual (bloco "Como iniciar no QEMU" e download do kernel).
-- 69 testes em `tests/pipeline.test.mjs`.
-- Workflows: `validate.yml` (testes) e `release.yml` (release + Pages).
+- 79 testes em `tests/pipeline.test.mjs`.
+- Workflows: `validate.yml` (testes) e `release.yml` (`discover` → `package`
+  matriz → `publish` → `deploy`).
 - Documentação em `docs/` (3 páginas).
 
 ### Validado nesta sessão
 
-- `node tests/run-all.mjs` passou: **69/69**.
-- Fluxo completo com uma saída de sistema **virtual** (kernel `Image` +
-  `rootfs.ext4`): a fase `package` publicou
-  `giochi-qemu-aarch64-0.1.0.img.xz` + `giochi-qemu-aarch64-0.1.0-Image.xz`,
-  `SHA256SUMS` com as duas linhas e `README.txt` com o comando do QEMU.
-- O site gerado contém o card `card-vm`, o link do kernel copiado para
-  `downloads/qemu-aarch64/` e o bloco "Como iniciar no QEMU".
-- `readRootfsApps` foi exercitado contra um ext4 de verdade (criado com
-  `mkfs.ext4 -d`, sem root): lê o `index.json` quando existe e devolve
-  `ok: false` quando o overlay ficou de fora.
+- `node tests/run-all.mjs` passou: **79/79**.
+- **O `release.yml` rodou de verdade** (tag `v0.1.1`): publicou
+  `giochi-powkiddy-x55-0.1.1.img.xz` (46,1 MB),
+  `giochi-qemu-aarch64-0.1.1.img.xz` e `-Image.xz` na release do GitHub, e o
+  site ficou no artefato `giochi-os-site` porque o Pages está em `legacy`.
+- **A imagem do QEMU boota**, medida dentro do QEMU com a imagem publicada:
+  login, rede, sshd e `giochi-init`; `giochi-launcher --listar` responde
+  `catálogo: 6 app(s)`; `giochi-tower` lê os `.ron` de `config/`
+  (`4 classes, 5 inimigos, 6 ondas, 4 bosses, 6 tiers de nemesis, 10 itens`) e
+  só morre no GLES, que não existe numa VM sem GPU.
+- **Cartão do X55**: `e2fsck -fn` status 0 depois da injeção, tabela de
+  partição intacta, 6 apps em `/opt/giochi/apps`.
+- `sha256sum -c SHA256SUMS` confere nos dois `dist/<device>/`.
+- O recorte de `sparse-checkout` do CI foi conferido contra a árvore
+  commitada dos dois repositórios externos: 66/66 e 39/39 arquivos, sem sobra.
 
 ### Não executado / pendente
 
-- **Nenhum build real de device de hardware** neste repositório — só o artefato
-  baixado do GIOCHI-SYSTEM.
-- **Nenhuma fase `apps` com app pronto para a imagem**: os apps de imagem do
-  Giochi app ainda não têm `bin/` exportado, então o overlay sai vazio.
-- **Sem CI real** para o `release.yml`: o workflow está escrito e validado como
-  YAML, mas nunca rodou.
+- **Nenhum boot do cartão em hardware real** (X55) a partir desta imagem. A
+  imagem bootou no antecessor; aqui ela foi verificada por `e2fsck`, tabela de
+  partição e leitura do `index.json` de dentro do ext4.
+- **GitHub Pages continua em "Deploy from a branch"**: o `deploy-pages` nunca
+  vai funcionar até trocar para **GitHub Actions** (Settings → Pages). O job
+  `deploy` é pulado e o site fica no artefato `giochi-os-site`.
+- **`GIOCHI-GAMES` não tem `apps.json`**: o catálogo é derivado das pastas, e
+  `cobrinha/assets` ainda não está commitado no repositório de jogos (aparece
+  no build local, não no do CI).
 
 ## 4. Estrutura
 
@@ -431,6 +441,9 @@ Medido depois das correções: QEMU com 6 apps e `e2fsck -fn` status 0; cartão 
 com 6 apps, `e2fsck -fn` status 0 e tabela de partição intacta (3622 → 3642
 inodes, exatamente os 20 arquivos).
 
+Depois de §7.7 o overlay é maior (80 arquivos, 12 MB com os dados dos jogos) e
+`e2fsck -fn` continua limpo nos dois aparelhos.
+
 ## 7.7 Decisões (15/11/2026, o release que rodou)
 
 A `v0.1.1` foi a primeira execução do `release.yml` que chegou a criar jobs.
@@ -455,12 +468,20 @@ quando o caminho inteiro roda de verdade.
   `<device>-<nome>`, corrige o `sha256sum -c` citado no README e falha se
   sobrar qualquer nome-base repetido. A lógica saiu do YAML justamente porque
   errou uma vez e ali não dava para testar.
-- **O overlay copiava `bin/` inteiro e só `bin/`.** Dois erros opostos: o
-  `.gitkeep` dos jogos ia para dentro do ext4 mesmo não estando no manifesto, e
-  `assets/` (textura, modelo, áudio) ficava de fora — o jogo abria degradado e
-  nada denunciava. Agora a cópia é exatamente `app.files`, e `apps.mjs` inclui
-  `assets/` nessa lista quando existe. É para `current_exe()/../assets` que o
-  binário olha.
+- **O overlay copiava `bin/` inteiro e só `bin/`.** O `.gitkeep` dos jogos ia
+  para dentro do ext4 mesmo não estando no manifesto, e os diretórios de dados
+  ficavam de fora. Foram dois, descobertos um de cada vez no boot do QEMU:
+  sem `assets/` o jogo abria sem textura; sem `config/` o tower morria com
+  `não consegui ler config/classes.ron` — que parece instalação incompleta e é
+  arquivo que não foi empacotado. Agora a cópia é exatamente `app.files`, e a
+  varredura é "tudo menos `target`/`vendor`/`src`/`crates`/…": uma lista de
+  permitidos envelhece no dia seguinte, e cada diretório esquecido custou uma
+  imagem que não funcionava. O binário procura em `current_exe()/../<dir>`.
+
+  Medido no boot do QEMU, com a imagem publicada: `giochi-launcher --listar`
+  devolve `catálogo: 6 app(s)` e `giochi-tower` imprime
+  `config: 4 classes, 5 inimigos, 6 ondas, 4 bosses, 6 tiers de nemesis, 10 itens`
+  antes de morrer no GLES — que é o esperado numa VM sem GPU.
 - **Checkout completo de repositório de jogo não cabe no runner.** Os dois
   repositórios externos versionam `target/` e `vendor/` de Rust: `GIOCHI-GAMES`
   tem 26 mil arquivos (~9 GB no checkout), `GIOCHI-APP` ~5,8 GB. O `package`

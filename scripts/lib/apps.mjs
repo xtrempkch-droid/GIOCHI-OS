@@ -9,6 +9,34 @@ import path from "node:path";
 import { isDir, isFile, listDir, readJson, sha256File } from "./fs.mjs";
 
 const CAPA_SIZE = 320;
+
+/**
+ * Diretórios que existem para desenvolver o app, não para rodá-lo.
+ *
+ * A varredura do pacote é "tudo menos isto" de propósito: `assets/` e `config/`
+ * foram descobertos um de cada vez, no boot do QEMU, e cada um custou uma
+ * imagem que não funcionava. Um diretório novo de dados entra sozinho.
+ */
+const DIRS_DE_DESENVOLVIMENTO = new Set([
+  ".cargo",
+  ".git",
+  ".github",
+  ".vscode",
+  "benches",
+  "build",
+  "crates",
+  "dist",
+  "docs",
+  "examples",
+  "node_modules",
+  "prototipo",
+  "scripts",
+  "src",
+  "target",
+  "tests",
+  "vendor",
+]);
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** Dimensões de um PNG, ou null se não for PNG. */
@@ -284,12 +312,22 @@ export async function loadApps(appsRoot) {
     };
     walkDir(binDir, appDir);
 
-    // Os jogos carregam a arte ao lado do binário: `<jogo>/assets/` é onde o
-    // executável procura (`current_exe()/../assets`). Copiar só `bin/` levava
-    // o jogo para a imagem sem textura, sem modelo e sem áudio — ele abria,
-    // degradado, e o manifesto não tinha como denunciar.
-    const assetsDir = path.join(appDir, "assets");
-    if (isDir(assetsDir)) walkDir(assetsDir, appDir);
+    // O resto do pacote é o que o app lê em tempo de execução: `assets/`
+    // (arte), `config/` (os `.ron` do tower) e o que vier depois. A regra é
+    // pelo avesso — tudo entra, menos o que só existe para desenvolver.
+    //
+    // Uma lista de permitidos envelhece no dia seguinte: `assets/` estava
+    // fora e o jogo abria sem textura; `config/` estava fora e o tower morria
+    // com "não consegui ler config/classes.ron", que parece instalação
+    // incompleta e é arquivo que não foi empacotado.
+    //
+    // Medido no boot do QEMU: sem esta varredura o jogo não chega a abrir.
+    for (const name of listDir(appDir)) {
+      if (name === "bin") continue;
+      const full = path.join(appDir, name);
+      if (!isDir(full) || DIRS_DE_DESENVOLVIMENTO.has(name)) continue;
+      walkDir(full, appDir);
+    }
 
     const hashes = {};
     for (const relative of files.sort()) {
