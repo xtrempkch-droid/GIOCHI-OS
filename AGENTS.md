@@ -52,13 +52,18 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
   `giochi-powkiddy-x55-0.1.1.img.xz` (46,1 MB),
   `giochi-qemu-aarch64-0.1.1.img.xz` e `-Image.xz` na release do GitHub, e o
   site ficou no artefato `giochi-os-site` porque o Pages está em `legacy`.
-- **A imagem do QEMU boota**, medida dentro do QEMU com a imagem publicada:
+- **A imagem do QEMU boota de verdade**, medida dentro do `qemu-system-aarch64`:
   login, rede, sshd e `giochi-init`; `giochi-launcher --listar` responde
-  `catálogo: 6 app(s)`; `giochi-tower` lê os `.ron` de `config/`
-  (`4 classes, 5 inimigos, 6 ondas, 4 bosses, 6 tiers de nemesis, 10 itens`) e
-  só morre no GLES, que não existe numa VM sem GPU.
-- **Cartão do X55**: `e2fsck -fn` status 0 depois da injeção, tabela de
-  partição intacta, 6 apps em `/opt/giochi/apps`.
+  `catálogo: 6 app(s) de /opt/giochi/apps/index.json`; `giochi-tower` lê os
+  `.ron` de `config/` (`4 classes, 5 inimigos, 6 ondas, 4 bosses, 6 tiers de
+  nemesis, 10 itens`) e só morre no GLES, que não existe numa VM sem GPU.
+  Esse boot foi da imagem montada **nesta máquina** (Buildroot 2024.02), com o
+  mesmo caminho de injeção do CI. A imagem do CI é Buildroot **2025.02** — não
+  é o mesmo binário, e não foi bootada aqui.
+- **O anexo publicado foi conferido baixando do GitHub** (`v0.1.6`):
+  `sha256sum -c` do X55 confere contra o `powkiddy-x55-SHA256SUMS` publicado, a
+  imagem tem tabela de partição válida, `e2fsck -fn` status 0 e os 6 apps em
+  `/opt/giochi/apps/index.json`.
 - `sha256sum -c SHA256SUMS` confere nos dois `dist/<device>/`.
 - O recorte de `sparse-checkout` do CI foi conferido contra a árvore
   commitada dos dois repositórios externos: 66/66 e 39/39 arquivos, sem sobra.
