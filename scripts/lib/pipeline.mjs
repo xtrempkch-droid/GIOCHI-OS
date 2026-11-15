@@ -565,9 +565,19 @@ function readmeFor(release) {
       "",
     );
   } else {
+    // O `.img.xz` NÃO vai para o cartão: `dd` copiaria bytes de xz e o cartão
+    // sairia com lixo. Quem publica comprimido tem de dizer isso antes do
+    // comando, não depois — medido no primeiro empacotamento do X55, que
+    // escrevia `dd if=giochi-...img.xz`.
+    const descomprimir = decompressCommand(release.system.image);
+    if (descomprimir) {
+      lines.push("Descomprima primeiro (o dd grava bytes crus, não o .xz):", `  ${descomprimir}`, "");
+    }
+    const cru = stripCompression(release.system.image);
+
     lines.push(
       "Gravar no cartão (substitua /dev/sdX pelo dispositivo certo):",
-      `  sudo dd if=${release.system.image} of=/dev/sdX bs=4M conv=fsync status=progress`,
+      `  sudo dd if=${cru} of=/dev/sdX bs=4M conv=fsync status=progress`,
       "",
       "O cartão será apagado por completo. Confira o nome do dispositivo duas vezes.",
       "",

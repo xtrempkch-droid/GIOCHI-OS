@@ -315,3 +315,10 @@ pre code{color:var(--accent)}
   .logo-stage,.logo-stage::after,.mark{animation:none}
   .logo-stage::after{display:none}
 }
+
+/* Aviso de descompressão no card de cartão.
+   O botão baixa .img.xz; gravar direto produz cartão que não inicializa. */
+.hint{margin-top:4px}
+.card pre.hint{font-size:11px;margin-top:6px}
+.card .hint strong{color:var(--warn)}
+.card .hint code{color:var(--accent)}

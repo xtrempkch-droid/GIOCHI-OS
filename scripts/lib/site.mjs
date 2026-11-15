@@ -93,7 +93,7 @@ function renderRelease(release) {
           : ""
       }
 
-      ${isVirtual ? renderRunBlock(release) : ""}
+      ${isVirtual ? renderRunBlock(release) : renderCardHint(system)}
 
       <footer>
         ${button}
@@ -101,6 +101,26 @@ function renderRelease(release) {
         <span class="muted mono">${escapeHtml(system.image || "")}</span>
       </footer>
     </article>`;
+}
+
+/**
+ * Aviso para imagem de cartão comprimida.
+ *
+ * O botão baixa um `.img.xz`; gravar isso direto no cartão produz um aparelho
+ * que não inicializa, porque o `dd` copia bytes de xz. O passo de descomprimir
+ * tem de estar na mesma tela do botão — a seção "Gravar" fica abaixo, e quem
+ * baixou não necessariamente desce até lá.
+ */
+function renderCardHint(system) {
+  const descomprimir = decompressCommand(system.image);
+  if (!descomprimir) return "";
+
+  return `
+        <p class="muted small hint">
+          Este download é comprimido. <strong>Descomprima antes de gravar</strong> —
+          o <code>dd</code> copia bytes crus:
+        </p>
+        <pre class="hint"><code>${escapeHtml(descomprimir)}</code></pre>`;
 }
 
 /**

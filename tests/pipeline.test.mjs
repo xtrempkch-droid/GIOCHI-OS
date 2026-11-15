@@ -1118,3 +1118,141 @@ test("fase package recusa injeção em cartão comprimido", async () => {
     assert.ok(result.errors.some((e) => e.code === "cartao_comprimido"));
   });
 });
+
+// ── README da release: o comando tem de servir para o arquivo publicado ──
+
+test("README de cartão comprimido manda descomprimir antes do dd", async () => {
+  // Defeito medido no primeiro empacotamento do X55 (14/11/2026): o README
+  // dizia `dd if=giochi-...img.xz of=/dev/sdX`. Seguir isso grava bytes de xz
+  // no cartão e produz um aparelho que não inicializa — e o texto está no
+  // arquivo que a pessoa abre justamente para não errar.
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "cartao");
+    const { image } = makeSystemOutput(systemDir);
+    // Device de CARTÃO: o `makeSystemOutput` escreve `qemu-aarch64`, que é
+    // detectado como alvo virtual e cairia no ramo do QEMU.
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "cartao-teste", name: "Cartão de teste", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(
+      path.join(systemDir, "SHA256SUMS"),
+      [
+        `${sha256(image)}  test.img`,
+        `${sha256(readFileSync(path.join(systemDir, "device.json")))}  device.json`,
+        `${sha256(readFileSync(path.join(systemDir, "build-info.txt")))}  build-info.txt`,
+        "",
+      ].join("\n"),
+    );
+    const outDir = path.join(dir, "dist");
+
+    const result = await runPackagePhase({
+      systemDir,
+      outDir,
+      version: "1.0.0",
+      compress: "gz",
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const readme = readFileSync(path.join(outDir, "README.txt"), "utf8");
+    assert.match(readme, /gzip -dk giochi-cartao-teste-1\.0\.0\.img\.gz/, "falta o passo de descomprimir");
+    assert.match(readme, /dd if=giochi-cartao-teste-1\.0\.0\.img of=/, "o dd tem de usar o .img cru");
+    assert.doesNotMatch(readme, /dd if=\S+\.(gz|xz|zst) of=/, "dd nunca aponta para o comprimido");
+  });
+});
+
+test("README de cartão cru não inventa passo de descompressão", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "cartao");
+    const { image } = makeSystemOutput(systemDir);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "cartao-teste", name: "Cartão de teste", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(
+      path.join(systemDir, "SHA256SUMS"),
+      [
+        `${sha256(image)}  test.img`,
+        `${sha256(readFileSync(path.join(systemDir, "device.json")))}  device.json`,
+        `${sha256(readFileSync(path.join(systemDir, "build-info.txt")))}  build-info.txt`,
+        "",
+      ].join("\n"),
+    );
+    const outDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir, version: "1.0.0" });
+
+    const readme = readFileSync(path.join(outDir, "README.txt"), "utf8");
+    assert.doesNotMatch(readme, /gzip -dk|xz -dk|zstd -d/);
+    assert.match(readme, /dd if=giochi-cartao-teste-1\.0\.0\.img of=/);
+  });
+});
+
+test("site avisa para descomprimir antes de gravar no cartão", async () => {
+  // O botão baixa um `.img.xz`. Quem gravar isso com `dd` produz um cartão que
+  // não inicializa — e o aviso tem de estar no card, não só na seção "Gravar",
+  // que fica abaixo e nem todo mundo rola até lá.
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "cartao");
+    const { image } = makeSystemOutput(systemDir);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "cartao-teste", name: "Cartão", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(
+      path.join(systemDir, "SHA256SUMS"),
+      [
+        `${sha256(image)}  test.img`,
+        `${sha256(readFileSync(path.join(systemDir, "device.json")))}  device.json`,
+        `${sha256(readFileSync(path.join(systemDir, "build-info.txt")))}  build-info.txt`,
+        "",
+      ].join("\n"),
+    );
+
+    const distDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir: distDir, version: "1.0.0", compress: "xz" });
+
+    const result = generateSite({
+      distDir,
+      outDir: path.join(dir, "site"),
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const html = readFileSync(result.indexPath, "utf8");
+    assert.match(html, /Descomprima antes de gravar/);
+    assert.match(html, /xz -dk giochi-cartao-teste-1\.0\.0\.img\.xz/);
+  });
+});
+
+test("site de cartão cru não mostra aviso de descompressão", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "cartao");
+    const { image } = makeSystemOutput(systemDir);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "cartao-teste", name: "Cartão", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(
+      path.join(systemDir, "SHA256SUMS"),
+      [
+        `${sha256(image)}  test.img`,
+        `${sha256(readFileSync(path.join(systemDir, "device.json")))}  device.json`,
+        `${sha256(readFileSync(path.join(systemDir, "build-info.txt")))}  build-info.txt`,
+        "",
+      ].join("\n"),
+    );
+
+    const distDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir: distDir, version: "1.0.0" });
+
+    const result = generateSite({
+      distDir,
+      outDir: path.join(dir, "site"),
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+    });
+    const html = readFileSync(result.indexPath, "utf8");
+    assert.doesNotMatch(html, /Descomprima antes de gravar/);
+  });
+});
