@@ -214,7 +214,16 @@ jobs:
             /app/*/capa.png
             /app/*/bin/
             /app/*/assets/
+            /app/*/config/
           sparse-checkout-cone-mode: false
+
+      - name: Conferir o recorte do catálogo de apps
+        # O `sparse-checkout` acima é uma afirmação sobre o formato do
+        # repositório, e afirmação sobre repositório de terceiro envelhece: um
+        # diretório novo de dados (foi assim com `config/`) deixaria de ser
+        # materializado em silêncio, e a imagem sairia sem ele. Aqui a perda
+        # vira erro com a lista do que faltou.
+        run: node scripts/check-checkout.mjs --repo .deps/app --catalog .deps/app/app
 
       - name: Checkout dos jogos
         # O repositório de jogos é o terceiro catálogo. Ele pode estar em
@@ -246,24 +255,15 @@ jobs:
             /*/capa.png
             /*/bin/
             /*/assets/
+            /*/config/
           sparse-checkout-cone-mode: false
 
       - name: Conferir o recorte do catálogo de jogos
-        # O recorte é uma afirmação sobre o repositório: "o catálogo está
-        # nestes caminhos". Se o repositório mudar de forma, a afirmação fica
-        # falsa e o `continue-on-error` acima transformaria a perda em "sem
-        # jogos" — release verde, site bonito, cartão sem jogo. Aqui a perda
-        # vira erro.
+        # Mesma checagem do catálogo de apps, e aqui ela importa mais: o
+        # `continue-on-error` do checkout transformaria um recorte errado em
+        # "sem jogos", e a release sairia verde sem eles.
         if: env.GAMES_REPO != '-' && steps.games.outcome == 'success'
-        run: |
-          set -euo pipefail
-          N=$(find .deps/games -mindepth 2 -maxdepth 2 -name metadata.json | wc -l)
-          echo "jogos com metadata.json: $N"
-          if [ "$N" -eq 0 ]; then
-            echo "::error::o checkout dos jogos não trouxe nenhum metadata.json — o recorte do sparse-checkout não casou com o repositório"
-            exit 1
-          fi
-          find .deps/games -mindepth 1 -maxdepth 1 -type d -printf '  %f\n' | sort
+        run: node scripts/check-checkout.mjs --repo .deps/games --catalog .deps/games
 
       - name: Baixar os artefatos do sistema
         uses: actions/download-artifact@v4

@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
 import { loadApps, loadAppsFromRoots, pngSize } from "../scripts/lib/apps.mjs";
+import { ehDeDesenvolvimento, faltandoNoCheckout } from "../scripts/lib/checkout.mjs";
 import { isFile, walk } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
 import {
@@ -2019,4 +2020,58 @@ test("nome repetido que sobra é erro, não anexo perdido", () => {
     assert.deepEqual(resultado.collisions.map((c) => c.nome), ["NOTAS.txt"]);
     assert.equal(resultado.errors[0].code, "anexo_colide");
   });
+});
+
+// ── recorte do checkout ─────────────────────────────────────
+
+test("o que é do pacote: diretórios de dados sim, desenvolvimento não", () => {
+  // Esta regra aparece em dois lugares — a fase `apps` e o `sparse-checkout`
+  // do CI — e os dois já divergiram: `assets/` e `config/` ficaram de fora um
+  // de cada vez, e o app abriu quebrado dentro do QEMU.
+  assert.equal(ehDeDesenvolvimento("target/debug/build.o"), true);
+  assert.equal(ehDeDesenvolvimento("vendor/serde/lib.rs"), true);
+  assert.equal(ehDeDesenvolvimento("src/main.rs"), true);
+  assert.equal(ehDeDesenvolvimento("crates/ui-sdl/src/lib.rs"), true);
+  assert.equal(ehDeDesenvolvimento("assets/texturas/chao.bmp"), false);
+  assert.equal(ehDeDesenvolvimento("config/classes.ron"), false);
+  // Arquivo solto na raiz do app: só os dois do contrato entram na imagem.
+  assert.equal(ehDeDesenvolvimento("Cargo.toml"), true);
+  assert.equal(ehDeDesenvolvimento("README.md"), true);
+  assert.equal(ehDeDesenvolvimento("metadata.json"), false);
+  assert.equal(ehDeDesenvolvimento("capa.png"), false);
+});
+
+test("o recorte acusa o arquivo do app que ficou fora", () => {
+  const arquivos = [
+    "assets/texturas/chao.bmp",
+    "bin/jogo",
+    "config/classes.ron",
+    "target/debug/build.o",
+    "Cargo.toml",
+  ];
+  // `config/` não veio no clone parcial — exatamente o que aconteceu com o
+  // tower, que morreu com "não consegui ler config/classes.ron".
+  const faltando = faltandoNoCheckout({
+    arquivos,
+    presentes: ["assets/texturas/chao.bmp", "bin/jogo", "target/debug/build.o", "Cargo.toml"],
+  });
+  assert.deepEqual(faltando, ["config/classes.ron"]);
+});
+
+test("o recorte completo não acusa nada", () => {
+  const arquivos = ["bin/jogo", "config/classes.ron", "target/debug/build.o"];
+  assert.deepEqual(
+    faltandoNoCheckout({ arquivos, presentes: ["bin/jogo", "config/classes.ron"] }),
+    [],
+  );
+});
+
+test("o release.yml recorta os diretórios que a fase apps copia", () => {
+  // Se os dois discordarem, o CI empacota menos que o build local.
+  const fonte = readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  for (const padrao of ["/app/*/assets/", "/app/*/config/", "/*/assets/", "/*/config/"]) {
+    assert.ok(fonte.includes(padrao), `falta o padrão ${padrao} no sparse-checkout`);
+  }
+  assert.match(fonte, /check-checkout\.mjs --repo \.deps\/games/);
+  assert.match(fonte, /check-checkout\.mjs --repo \.deps\/app/);
 });

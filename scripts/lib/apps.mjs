@@ -6,37 +6,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
+import { DIRS_DE_DESENVOLVIMENTO } from "./checkout.mjs";
 import { isDir, isFile, listDir, readJson, sha256File } from "./fs.mjs";
 
 const CAPA_SIZE = 320;
-
-/**
- * Diretórios que existem para desenvolver o app, não para rodá-lo.
- *
- * A varredura do pacote é "tudo menos isto" de propósito: `assets/` e `config/`
- * foram descobertos um de cada vez, no boot do QEMU, e cada um custou uma
- * imagem que não funcionava. Um diretório novo de dados entra sozinho.
- */
-const DIRS_DE_DESENVOLVIMENTO = new Set([
-  ".cargo",
-  ".git",
-  ".github",
-  ".vscode",
-  "benches",
-  "build",
-  "crates",
-  "dist",
-  "docs",
-  "examples",
-  "node_modules",
-  "prototipo",
-  "scripts",
-  "src",
-  "target",
-  "tests",
-  "vendor",
-]);
-
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** Dimensões de um PNG, ou null se não for PNG. */
