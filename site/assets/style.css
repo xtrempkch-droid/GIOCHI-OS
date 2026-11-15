@@ -61,9 +61,43 @@ code,pre,.mono{font-family:var(--mono)}
   box-shadow:0 0 18px -6px var(--accent);
   animation:marca-pulsa 4.5s ease-in-out infinite;
 }
-.top nav{display:flex;gap:22px;font-size:14px}
-.top nav a{color:var(--dim)}
-.top nav a:hover{color:var(--text);text-decoration:none}
+/* ── menu com submenus ────────────────── */
+/*
+  `<details>` em vez de hover: hover não existe em tela de toque, e um menu que
+  depende de JS não abre quando o JS falha. A lista fica fechada por padrão e
+  cada submenu abre com clique ou teclado.
+*/
+.menu > ul{display:flex;align-items:center;gap:6px;list-style:none}
+.menu > ul > li > .submenu{position:relative}
+.menu summary{
+  display:flex;align-items:center;gap:6px;
+  padding:8px 12px;border-radius:9px;
+  font-size:14px;color:var(--dim);cursor:pointer;
+  list-style:none;user-select:none;
+}
+.menu summary::-webkit-details-marker{display:none}
+.menu summary::after{
+  content:"";width:5px;height:5px;
+  border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+  transform:rotate(45deg) translateY(-1px);opacity:0.7;
+}
+.menu summary:hover,.menu summary:focus-visible{color:var(--text);background:rgba(120,160,200,0.08)}
+.menu [open] > summary{color:var(--text);background:rgba(120,160,200,0.1)}
+.menu ul ul{
+  list-style:none;position:absolute;right:0;top:calc(100% + 8px);z-index:30;
+  min-width:250px;padding:8px;
+  background:var(--panel);border:1px solid var(--line2);
+  border-radius:12px;
+  box-shadow:0 18px 40px -18px #000;
+}
+.menu ul ul a{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:9px 11px;border-radius:8px;font-size:13px;color:var(--dim);
+}
+.menu ul ul a:hover,.menu ul ul a:focus-visible{
+  background:rgba(102,192,244,0.12);color:var(--text);text-decoration:none;
+}
+.menu ul ul a span{font-size:11px;color:var(--faint);font-family:var(--mono)}
 
 /* ── hero ─────────────────────────────── */
 .hero{padding:88px 0 64px}
@@ -322,3 +356,61 @@ pre code{color:var(--accent)}
 .card pre.hint{font-size:11px;margin-top:6px}
 .card .hint strong{color:var(--warn)}
 .card .hint code{color:var(--accent)}
+
+/* ── tabela de aparelhos ──────────────── */
+.table-wrap{
+  margin-top:26px;overflow-x:auto;
+  border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);
+}
+.tabela{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
+.tabela th,.tabela td{
+  padding:12px 16px;text-align:left;
+  border-bottom:1px solid var(--line);white-space:nowrap;
+}
+.tabela thead th{
+  font-size:11px;letter-spacing:0.9px;text-transform:uppercase;
+  color:var(--faint);font-weight:700;
+  background:rgba(0,0,0,0.25);
+}
+.tabela tbody tr:last-child td{border-bottom:none}
+.tabela tbody tr:hover{background:rgba(120,160,200,0.05)}
+.tabela a{font-weight:600}
+.tabela td.mono{font-family:var(--mono);color:var(--dim)}
+
+/* ── listas de links ──────────────────── */
+.links{list-style:none;display:grid;gap:6px;margin-top:6px}
+.links a{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:12px;font-family:var(--mono);
+  overflow-wrap:anywhere;
+}
+.links a::before{
+  content:"";flex:none;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);opacity:0.7;
+}
+.lista-repos{margin-top:22px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));display:grid}
+.lista-repos a{font-family:var(--font);font-size:14px}
+
+/* ── âncora de aparelho no card ───────── */
+.card{scroll-margin-top:80px}
+.section{scroll-margin-top:60px}
+
+/* Continuação do card de dispositivo, para o bloco de download por aparelho. */
+.card .sha{
+  font-size:11px;font-family:var(--mono);color:var(--faint);
+  overflow-wrap:anywhere;line-height:1.5;
+}
+.card .downlinks{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.card .downlinks .btn{font-size:12px;min-height:36px;padding:0 14px}
+
+/* No celular o menu vira uma faixa rolável: submenu absoluto não cabe. */
+@media (max-width:820px){
+  .top .wrap{height:auto;padding-top:10px;padding-bottom:10px;flex-wrap:wrap;gap:8px}
+  .menu{width:100%;overflow-x:auto}
+  .menu > ul{gap:2px}
+  .menu summary{padding:6px 9px;font-size:13px}
+  .menu ul ul{
+    position:fixed;left:12px;right:12px;top:110px;min-width:0;
+  }
+}

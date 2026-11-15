@@ -1890,13 +1890,16 @@ test("a matriz do release sai pronta do discover, sem função inventada", () =>
   assert.match(fonte, /devices_json=\$JSON/);
 });
 
-test("o release publica os artefatos mesmo sem Pages configurado", () => {
+test("o release publica a página como arquivo no branch, sem depender do Pages", () => {
+  // A página é UM `index.html` na raiz, e o GitHub Pages publica o repositório:
+  // não há job de deploy, nem artefato de site, nem `build_type` a exigir. Se
+  // alguém reintroduzir um deploy que depende de configuração, este teste cai.
   const fonte = readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
-  // O site tem de sobreviver num artefato: sem isso, um Pages em `legacy`
-  // deixaria o HTML gerado sem nenhum lugar de onde ser pego.
-  assert.match(fonte, /name:\s*giochi-os-site/);
-  assert.match(fonte, /pages_ready: \$\{\{ steps\.pages\.outputs\.ready \}\}/);
-  assert.match(fonte, /if:\s*needs\.publish\.outputs\.pages_ready == 'true'/);
+  assert.match(fonte, /build-site\.mjs --dist dist --single-file --out index\.html/);
+  assert.match(fonte, /git checkout -B main origin\/main/);
+  assert.match(fonte, /commit -m "site: página de download/);
+  assert.doesNotMatch(fonte, /actions\/deploy-pages/);
+  assert.doesNotMatch(fonte, /upload-pages-artifact/);
 });
 
 test("fase apps leva os diretórios de dados do app, e só eles", async () => {
@@ -1947,6 +1950,7 @@ test("fase apps copia exatamente o que o manifesto lista, sem .gitkeep", async (
     assert.equal(isFile(path.join(overlay, "bin", ".gitkeep")), false);
   });
 });
+
 
 // ── anexos da release ───────────────────────────────────────
 
@@ -2142,4 +2146,171 @@ test("o Validate roda quando um workflow muda", () => {
   // sem nenhum job — passa pelo `Validate` sem ser visto.
   const validate = readFileSync(path.join(ROOT, ".github", "workflows", "validate.yml"), "utf8");
   assert.match(validate, /\.github\/workflows\/\*\*/);
+});
+
+// ── a página de download (arquivo único) ────────────────────
+
+function makeSiteFixture(dir) {
+  const dist = path.join(dir, "dist");
+  const card = path.join(dist, "powkiddy-x55");
+  write(
+    path.join(card, "release.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      device: { id: "powkiddy-x55", name: "Powkiddy X55", arch: "arm64", kind: "card" },
+      system: {
+        version: "1.2.3",
+        buildroot: "2025.02",
+        kind: "card",
+        image: "giochi-powkiddy-x55-1.2.3.img.xz",
+        imageSha256: "a".repeat(64),
+        sizeHuman: "46.0 MB",
+        sizeBytes: 48234496,
+        kernel: null,
+      },
+      boot: null,
+      apps: { embedded: [{ id: "launcher", version: "0.1.0", license: "MIT" }], store: [] },
+    }),
+  );
+  const vm = path.join(dist, "qemu-aarch64");
+  write(
+    path.join(vm, "release.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      device: { id: "qemu-aarch64", name: "QEMU AArch64 Virt", arch: "arm64", kind: "virtual" },
+      system: {
+        version: "1.2.3",
+        buildroot: "2025.02",
+        kind: "virtual",
+        image: "giochi-qemu-aarch64-1.2.3.img.xz",
+        imageSha256: "b".repeat(64),
+        sizeHuman: "14.8 MB",
+        sizeBytes: 15518924,
+        kernel: {
+          name: "giochi-qemu-aarch64-1.2.3-Image.xz",
+          sha256: "c".repeat(64),
+          sizeHuman: "3.7 MB",
+        },
+      },
+      boot: {
+        binary: "qemu-system-aarch64",
+        machine: "virt",
+        cpu: "cortex-a53",
+        smp: 2,
+        memoryMiB: 512,
+        disk: "giochi-qemu-aarch64-1.2.3.img",
+        kernel: "giochi-qemu-aarch64-1.2.3-Image",
+        cmdline: "root=/dev/vda rw console=ttyAMA0",
+      },
+      apps: { embedded: [{ id: "launcher", version: "0.1.0", license: "MIT" }], store: [] },
+    }),
+  );
+  return dist;
+}
+
+function buildSingleFile(dir, downloadBase) {
+  const dist = makeSiteFixture(dir);
+  const out = path.join(dir, "index.html");
+  const resultado = generateSite({
+    distDir: dist,
+    outDir: out,
+    templatePath: path.join(ROOT, "site", "template.html"),
+    stylePath: path.join(ROOT, "site", "assets", "style.css"),
+    singleFile: true,
+    downloadBase,
+    repo: "dono/repo",
+  });
+  return { resultado, html: readFileSync(out, "utf8") };
+}
+
+test("a página é um arquivo: nada é carregado de fora", () => {
+  // O repositório só precisa de um `index.html` na raiz. Qualquer `<link>` ou
+  // `<img src>` relativo é uma segunda dependência — e some se alguém mexer na
+  // pasta de assets.
+  withTempDir((dir) => {
+    const { resultado, html } = buildSingleFile(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.match(html, /<style>/, "o CSS entra inline");
+    assert.doesNotMatch(html, /<link rel="stylesheet"/);
+    assert.doesNotMatch(html, /(?:src|href)="assets\//);
+    assert.doesNotMatch(html, /(?:src|href)="downloads\//);
+    // Tudo que é subrecurso é data URI ou inline.
+    for (const m of html.matchAll(/<(?:img|link)[^>]*(?:src|href)="([^"]*)"/g)) {
+      assert.ok(m[1].startsWith("data:"), `subrecurso externo: ${m[1].slice(0, 60)}`);
+    }
+  });
+});
+
+test("a página linka o anexo de cada aparelho, com o nome que o flatten publica", () => {
+  // O nome tem de ser o mesmo que `flattenReleaseAssets` cria: `<aparelho>-<nome>`.
+  // Se divergir, o botão da página baixa 404 — e é justamente o botão principal.
+  withTempDir((dir) => {
+    const { html } = buildSingleFile(dir, "https://exemplo.test/releases/download/v1.2.3/");
+
+    for (const nome of [
+      "giochi-powkiddy-x55-1.2.3.img.xz",
+      "qemu-aarch64-SHA256SUMS",
+      "powkiddy-x55-SHA256SUMS",
+      "powkiddy-x55-README.txt",
+      "qemu-aarch64-README.txt",
+      "giochi-qemu-aarch64-1.2.3-Image.xz",
+    ]) {
+      assert.ok(html.includes(`https://exemplo.test/releases/download/v1.2.3/${nome}`), `falta ${nome}`);
+    }
+  });
+});
+
+test("sem base explícita, o link sai da versão do próprio release.json", () => {
+  // O tag vem da mesma versão que nomeia os arquivos; não há como discordarem.
+  withTempDir((dir) => {
+    const { html } = buildSingleFile(dir);
+    assert.ok(html.includes("https://github.com/dono/repo/releases/download/v1.2.3/"));
+    assert.doesNotMatch(html, /href="downloads\//);
+  });
+});
+
+test("os submenus levam a cada aparelho publicado", () => {
+  // "todas as informações separadas por submenus": Baixar, Instalar, Aparelhos
+  // e Projeto, com um item por aparelho em dois deles.
+  withTempDir((dir) => {
+    const { html } = buildSingleFile(dir);
+    for (const menu of ["Baixar", "Instalar", "Aparelhos", "Projeto"]) {
+      assert.ok(html.includes(`<summary>${menu}</summary>`), `falta o submenu ${menu}`);
+    }
+    assert.ok(html.includes('href="#baixar-powkiddy-x55"'));
+    assert.ok(html.includes('href="#baixar-qemu-aarch64"'));
+    assert.ok(html.includes('id="baixar-powkiddy-x55"'));
+    assert.ok(html.includes('id="baixar-qemu-aarch64"'));
+    assert.ok(html.includes('id="aparelho-powkiddy-x55"'));
+  });
+});
+
+test("toda âncora da página aponta para um id que existe", () => {
+  // Um submenu que rola para lugar nenhum é pior que menu nenhum.
+  withTempDir((dir) => {
+    const { html } = buildSingleFile(dir);
+    const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
+    const quebradas = [...html.matchAll(/href="#([^"]+)"/g)]
+      .map((m) => m[1])
+      .filter((alvo) => !ids.has(alvo));
+    assert.deepEqual(quebradas, []);
+  });
+});
+
+test("placeholder que sobra no template é erro, não comentário invisível", () => {
+  // Um `<!--X-->` esquecido não aparece na página: vira um buraco silencioso.
+  withTempDir((dir) => {
+    const template = path.join(dir, "template.html");
+    write(template, "<html><body><!--INEXISTENTE--></body></html>");
+    const resultado = generateSite({
+      distDir: makeSiteFixture(dir),
+      outDir: path.join(dir, "out.html"),
+      templatePath: template,
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      downloadBase: "https://exemplo.test/",
+    });
+    assert.equal(resultado.ok, false);
+    assert.match(resultado.errors[0].message, /INEXISTENTE/);
+  });
 });

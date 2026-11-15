@@ -84,9 +84,12 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
 
 ```text
 Giochi os/
+├── index.html                 # A PÁGINA PUBLICADA — gerada, commitada
 ├── scripts/
 │   ├── assemble.mjs           # CLI da junção
-│   ├── build-site.mjs         # CLI do site
+│   ├── build-site.mjs         # CLI da página (arquivo único ou pasta local)
+│   ├── flatten-release.mjs    # nomes dos anexos por aparelho
+│   ├── check-checkout.mjs     # confere o recorte do CI
 │   └── lib/
 │       ├── fs.mjs             # hash, JSON, listagem
 │       ├── system.mjs         # lê e verifica out/<device>/
@@ -97,6 +100,8 @@ Giochi os/
 │       ├── rootfs.mjs         # lê apps de dentro do ext4 (debugfs)
 │       ├── inject.mjs         # escreve overlay no ext4 sem montar
 │       ├── qemu.mjs           # comando de boot do alvo virtual
+│       ├── release-assets.mjs # layout + nomes dos anexos da release
+│       ├── checkout.mjs       # o que é do app × o que é de desenvolvimento
 │       └── names.mjs          # nome cru × nome comprimido
 ├── site/
 │   ├── template.html
@@ -258,8 +263,8 @@ node scripts/assemble.mjs apps --apps ../"Giochi app"/app --out ../staging
 # ... rodar o build do Giochi System com o overlay ...
 node scripts/assemble.mjs package --system ../"Giochi System"/out/qemu-aarch64 \
   --apps ../"Giochi app"/app --out dist --version 0.1.0 --compress xz
-node scripts/build-site.mjs --dist dist
-# abrir site/dist/index.html
+node scripts/build-site.mjs --dist dist --single-file --out index.html
+# a página publicada é index.html na raiz
 ```
 
 Build do sistema nesta máquina (Linux, container):
@@ -282,27 +287,32 @@ Dois caminhos:
 **Manual**, com os artefatos em `dist/`:
 
 ```bash
-# crie a release no GitHub e anexe dist/*
-gh release create v0.1.0 dist/* --title "Giochi OS 0.1.0" --notes-file dist/README.txt
-# publique o conteúdo de site/dist (Pages, rsync, S3…)
+node scripts/flatten-release.mjs --dist dist      # nomes por aparelho
+gh release create v0.1.0 dist/* --title "Giochi OS 0.1.0"
+node scripts/build-site.mjs --dist dist --single-file --out index.html
+git add index.html && git commit -m "site: página da v0.1.0" && git push
 ```
 
+A página é um arquivo no branch: publicar o site é commitar `index.html`.
+
 **Workflow** `.github/workflows/release.yml` — **uma execução para todos os
-aparelhos**, em quatro jobs:
+aparelhos**, em três jobs:
 
 | Job | O que faz |
 | --- | --- |
 | `discover` | lê `device/devices.json` do GIOCHI-SYSTEM e devolve os habilitados |
 | `package` | matriz: baixa o artefato de cada device, empacota com `--inject-apps` |
-| `publish` | reúne os dist, gera o site **uma vez**, cria a release, sobe o Pages |
-| `deploy` | publica no GitHub Pages |
+| `publish` | reúne os dist, desdobra os nomes, cria a release, gera e commita `index.html` |
+
+Não há job de deploy: o Pages publica o repositório, e a página é o
+`index.html` da raiz. Nada a configurar.
 
 Publicar um device por execução parece mais simples e tem um defeito que só
-aparece depois: cada execução gera o seu site, e a segunda sobrescreve o Pages
-com uma página de um card só.
+aparece depois: cada execução gera a sua página, e a segunda sobrescreveria a
+primeira com um card só.
 
 Dispara por tag `v*` ou por `workflow_dispatch` (`devices`, `version`,
-`system_run_id`). Requer Pages configurado com "GitHub Actions" como origem.
+`system_run_id`, `app_repo`, `games_repo`).
 
 O workflow depende de um run **verde** do GIOCHI-SYSTEM: sem artefato ele para
 no passo "Resolver o build do sistema". Se o `workflow_dispatch` for usado, o
@@ -542,3 +552,39 @@ Estado da publicação depois disso: ver §11. A `v0.1.6` é a primeira release 
 os nomes separados por aparelho, baixada e conferida de fora. O que falta para o
 site ficar no ar é **uma configuração**: Settings → Pages → Source:
 **GitHub Actions**. Sem isso o HTML fica no artefato `giochi-os-site`.
+
+## 7.8 Decisões (15/11/2026, uma página na raiz)
+
+O site deixou de ser um diretório gerado e passou a ser **um arquivo**:
+`index.html`, na raiz, commitado. O GitHub Pages publica o repositório, então a
+página existe sem job de deploy, sem artefato de site e sem `build_type`.
+
+- **Arquivo único, não pasta.** `build-site.mjs --single-file` escreve um HTML
+  com o CSS no `<style>`, a marca em SVG inline, o logo em base64 e os
+  downloads apontando para a release. Nada é carregado de fora: nenhum `<link>`,
+  nenhum `src` relativo. Um teste percorre todo `img`/`link` do arquivo e recusa
+  qualquer subrecurso que não seja `data:`. 168 KiB, sem requisição extra.
+- **Por que arquivo e não pasta publicada:** `site/dist` era gerado no runner e
+  subia como artefato do Pages — que dependia de uma configuração do repositório
+  (`build_type: workflow`) que ninguém tinha como mudar pelo código. Um arquivo no
+  branch não depende de configuração nenhuma, e o diff da página fica no
+  histórico junto do commit que a mudou.
+- **A página é regenerada pelo `release.yml`, no mesmo run que publica os
+  arquivos.** Ela cita versão, tamanho e sha256 de cada aparelho: gerar de outra
+  build seria afirmar número errado. Medido: a build local é Buildroot 2024.02 e a
+  do CI é 2025.02 — mesmo código, imagens diferentes, então os números daqui não
+  valem lá.
+- **Submenus com `<details>`, não com hover nem JS.** Hover não existe em tela de
+  toque e um menu que depende de JS não abre quando o JS falha. Quatro submenus
+  (Baixar, Instalar, Aparelhos, Projeto) com um item por aparelho em dois deles.
+  Um teste confere que **todo** `href="#x"` tem `id="x"`: submenu que rola para
+  lugar nenhum é pior que menu nenhum.
+- **O nome do anexo na página é o do `flatten`.** `<aparelho>-SHA256SUMS` e
+  `<aparelho>-README.txt` vêm de `nomeComAparelho`, a mesma função que renomeia os
+  anexos da release. Duas regras de nome divergiriam calado, e o botão principal
+  baixaria 404.
+- **Placeholder que sobra no template é erro.** Um `<!--X-->` esquecido não
+  aparece na página — vira buraco invisível. A geração falha e diz quais sobraram.
+
+O `deploy` e o artefato `giochi-os-site` saíram do workflow. O que sobra é:
+`package` (matriz) → `publish` (release + `index.html` commitado no `main`).

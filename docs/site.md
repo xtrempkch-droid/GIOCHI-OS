@@ -1,54 +1,61 @@
 # Site
 
-O site de download das imagens.
+A página de download das imagens: **um arquivo**, `index.html`, na raiz.
 
 ## Como é gerado
 
 ```bash
-node scripts/build-site.mjs --dist dist
+node scripts/build-site.mjs --dist dist --single-file --out index.html
 ```
 
 1. Varre `dist/` procurando `release.json` em **qualquer profundidade** — o CI
    baixa artefatos em subpastas com nome do device.
-2. Ordena por data, mais recente primeiro.
-3. Copia cada imagem para `site/dist/downloads/<device>/`.
-4. Injeta os cards no `site/template.html`.
-5. Escreve `site/dist/index.html` e `site/dist/releases.json`.
+2. Ordena com cartão antes de máquina virtual, e depois por nome.
+3. Injeta os cards no `site/template.html`.
+4. Escreve **um** `index.html`: CSS no `<style>`, marca em SVG inline, logo em
+   base64, e os downloads apontando para a release do GitHub.
+
+Os links saem de `https://github.com/<repo>/releases/download/v<versão>/`, com a
+versão lida do próprio `release.json` — a mesma que nomeia os arquivos. Base
+diferente: `--download-base <url>`.
+
+## Por que um arquivo
+
+- O GitHub Pages publica o **repositório**. Com `index.html` na raiz, a página
+  existe sem job de deploy, sem artefato de site e sem configuração de origem.
+- Nada é carregado de fora: sem `<link>`, sem `src` relativo. Um teste percorre
+  todo `img`/`link` e recusa subrecurso que não seja `data:`.
+- O diff da página fica no histórico, junto do commit que a mudou.
 
 ## Por que sem `fetch`
 
-O site precisa funcionar aberto direto do disco:
+A página é gerada com os dados **embutidos**. Buscar JSON no navegador seria
+bloqueado por CORS em `file://` e passaria a depender de rede (e de rate limit)
+para mostras a lista. Quem abre o arquivo vê a lista.
 
-```text
-file:///…/Giochi os/site/dist/index.html
-```
-
-`fetch()` de um JSON local é bloqueado por CORS em `file://`. Um site de download
-que exige `python -m http.server` para mostrar a lista é um site que não funciona
-para quem só quer clicar e baixar.
-
-Solução: os dados são **embutidos no HTML** no momento da geração. O resultado é
-um arquivo autocontido, com um CSS ao lado.
-
-## Links relativos
-
-Tudo é relativo (`assets/style.css`, `downloads/<device>/<arquivo>.img`). Isso
-permite publicar em qualquer caminho — raiz do domínio, subpasta, GitHub Pages —
-sem mudar configuração.
-
-## Publicar
+## Modo local
 
 ```bash
-# gerar
-node scripts/assemble.mjs package --system <out/device> --out dist --version 0.1.0 --compress xz
-node scripts/build-site.mjs --dist dist
-
-# publicar o conteúdo de site/dist
-rsync -av site/dist/ usuario@servidor:/var/www/giochi/
+node scripts/build-site.mjs --dist dist            # site/dist/ com as imagens ao lado
 ```
 
-Como o site é estático, serve qualquer hospedagem: Nginx, GitHub Pages, S3,
-Netlify. Não há back-end.
+Gera `site/dist/index.html` + `assets/` + `downloads/` com as imagens copiadas,
+para conferir a página com os arquivos de verdade. **Não** é o que é publicado —
+e `site/dist/` é ignorado pelo git.
+
+## Navegação
+
+Quatro submenus, feitos com `<details>`: abrem sem JavaScript, respondem ao
+teclado e não dependem de hover (que não existe em tela de toque).
+
+| Submenu | Conteúdo |
+| --- | --- |
+| Baixar | um item por aparelho + "conferir o checksum" |
+| Instalar | cartão SD, máquina virtual, checksum |
+| Aparelhos | lista, tabela de requisitos e um item por aparelho |
+| Projeto | como é feito, repositórios, licenças |
+
+## Publicar
 
 O workflow `.github/workflows/release.yml` faz o caminho completo, e é **uma
 execução para todos os aparelhos**:
@@ -59,15 +66,14 @@ discover  → lê device/devices.json do GIOCHI-SYSTEM, devolve os habilitados
 package   (matriz) → baixa o artefato de cada device, empacota com
                      --inject-apps, sobe um dist/<device> por artefato
    ↓
-publish   → reúne todos os dist, gera o site UMA vez, cria a release, sobe Pages
-   ↓
-deploy    → publica no GitHub Pages
+publish   → reúne os dist, desdobra os nomes repetidos, cria a release,
+            gera index.html e commita no main
 ```
 
 O `discover` não é enfeite. Publicar um device por execução parece simples e tem
-um defeito que só aparece depois: cada execução gera o **seu** site, e a segunda
-sobrescreve o Pages com uma página de um card só. Com a matriz, todos entram na
-mesma release e num único deploy.
+um defeito que só aparece depois: cada execução gera a **sua** página, e a
+segunda sobrescreveria a primeira com um card só. Com a matriz, todos entram na
+mesma release e na mesma página.
 
 Dispara por tag `v*` ou por `workflow_dispatch`. Inputs:
 
@@ -76,14 +82,10 @@ Dispara por tag `v*` ou por `workflow_dispatch`. Inputs:
 | `devices` | lista separada por vírgula; vazio = habilitados no GIOCHI-SYSTEM |
 | `version` | versão publicada; vazio = nome da tag |
 | `system_run_id` | run específico do GIOCHI-SYSTEM; vazio = último verde |
+| `app_repo`, `games_repo`, `system_repo` | repositórios de origem (`-` desliga os jogos) |
 
-O `publish` confere que recebeu **um `release.json` por device** antes de gerar
-o site. Sem isso, um download incompleto publicaria uma página com menos cards e
-o deploy sairia verde.
-
-Para o Pages funcionar, a origem precisa estar em **Settings → Pages → Source:
-GitHub Actions**. O workflow usa `actions/upload-pages-artifact` e
-`actions/deploy-pages`.
+O `publish` confere que recebeu **um `release.json` por device** antes de gerar a
+página. Sem isso, um download incompleto publicaria uma página com menos cards.
 
 ## O que o card mostra
 
@@ -94,12 +96,13 @@ GitHub Actions**. O workflow usa `actions/upload-pages-artifact` e
 | Versão | `release.system.version` |
 | Tamanho | `release.system.sizeHuman` |
 | Buildroot | `release.system.buildroot` |
-| SHA-256 (12 primeiros) | `release.system.imageSha256` |
+| SHA-256 completo | `release.system.imageSha256` |
+| Botões de checksum e instruções | anexos `<aparelho>-SHA256SUMS` e `<aparelho>-README.txt` |
 | Kernel e tamanho | `release.system.kernel` |
 | Apps embutidos e de loja | `release.apps` |
 
-O hash completo fica no `SHA256SUMS` copiado junto da imagem — o card mostra só
-o começo, porque hash completo em tela não é verificável a olho.
+O hash aparece completo porque é para copiar e comparar, não para ler. Quem
+prefere o comando tem o botão do `SHA256SUMS` do aparelho no mesmo card.
 
 ## Dois tipos de card
 
@@ -119,14 +122,18 @@ confundir um disco de VM com uma imagem de cartão.
 
 ## Estado
 
-O site é gerado e os testes conferem que:
+O que os testes conferem na página publicada:
 
-- o HTML contém o nome do device e o link da imagem;
-- a imagem foi realmente copiada para `downloads/`;
-- o CSS está no lugar;
-- release sem imagem gera aviso, não link quebrado;
-- alvo virtual copia o kernel e mostra o comando do QEMU;
-- alvo de cartão **não** mostra o bloco de QEMU;
-- todo `assets/*` referenciado no HTML existe no site publicado.
+- é **um** arquivo: nenhum subrecurso fora de `data:`;
+- cada aparelho aparece nos submenus, no card e na tabela;
+- o link de cada anexo usa o nome que o `flatten` publica
+  (`<aparelho>-SHA256SUMS`, `<aparelho>-README.txt`);
+- sem `--download-base`, a URL sai da versão do próprio `release.json`;
+- toda âncora `href="#x"` tem `id="x"` — submenu que não rola é menu quebrado;
+- placeholder esquecido no template faz a geração **falhar**;
+- alvo virtual mostra o comando do QEMU; alvo de cartão mostra o passo de
+  descomprimir;
+- release sem imagem gera aviso, não link quebrado.
 
-Não há CDN, cache, analytics nem formulário. É uma página de download.
+Não há CDN, cache, analytics, formulário nem JavaScript. É uma página de
+download.

@@ -55,8 +55,6 @@ on:
 permissions:
   contents: write
   actions: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -313,8 +311,6 @@ jobs:
     name: Publicar release e site
     needs: [discover, package]
     runs-on: ubuntu-24.04
-    outputs:
-      pages_ready: ${{ steps.pages.outputs.ready }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -345,8 +341,8 @@ jobs:
           set -euo pipefail
           echo "dist/ tem:"
           find dist -maxdepth 6 | sort | head -80
-          # Sem esta checagem, um download incompleto viraria um site com menos
-          # cards — e o deploy publicaria a página, verde.
+          # Sem esta checagem, um download incompleto viraria uma página com
+          # menos cards — publicada, verde.
           COUNT=$(find dist -name release.json | wc -l)
           # `wc -l` conta CARACTERES DE NOVA LINHA, não linhas: `printf '%s' "a,b"`
           # vira "a\nb", que tem uma nova linha — dois aparelhos contavam como
@@ -366,9 +362,6 @@ jobs:
             echo "::error::esperava $EXPECTED release(s), encontrei $COUNT. dist: $LISTA"
             exit 1
           fi
-
-      - name: Gerar o site
-        run: node scripts/build-site.mjs --dist dist
 
       - name: Desdobrar os nomes que se repetem entre aparelhos
         # Os anexos de uma release são PLANOS: `dist/<device>/SHA256SUMS` de um
@@ -414,76 +407,31 @@ jobs:
           fail_on_unmatched_files: false
           overwrite_files: true
 
-      - name: Guardar o site como artefato
-        # O site sai daqui mesmo quando o Pages não está em "GitHub Actions".
-        # Sem isso, uma configuração de Pages errada não custaria só o deploy:
-        # custaria também o único lugar onde o HTML gerado existia.
-        uses: actions/upload-artifact@v4
-        with:
-          name: giochi-os-site
-          path: site/dist
-          retention-days: 30
+      - name: Gerar a página de download na raiz
+        # UM arquivo: CSS no `<style>`, marca em SVG, logo em base64, e os
+        # downloads apontando para os anexos desta release. É a página que o
+        # GitHub Pages publica — o Pages publica o REPOSITÓRIO, então não há job
+        # de deploy, nem artefato de site, nem `build_type: workflow` a exigir.
+        run: node scripts/build-site.mjs --dist dist --single-file --out index.html
 
-      - name: Pedir o Pages em "GitHub Actions"
-        # `actions/deploy-pages` exige `build_type: workflow`. Este repositório
-        # foi criado com "Deploy from a branch", e nesse modo o site nunca sobe
-        # — o deploy falha com 404 e leva junto a publicação da release se os
-        # dois estiverem amarrados.
-        #
-        # A chamada é idempotente e `continue-on-error`: se o token não tiver
-        # força para mudar a configuração, nada muda e o passo seguinte avisa.
-        # Com `pages: write` (declarado em `permissions`) ela costuma passar.
-        continue-on-error: true
+      - name: Publicar a página no branch
+        # Roda depois da release: se a página falhar, os arquivos já estão
+        # publicados e o próximo run conserta a página.
         run: |
           set -euo pipefail
-          ATUAL=$(gh api "repos/${{ github.repository }}/pages" --jq '.build_type' 2>/dev/null || echo "ausente")
-          echo "build_type atual: $ATUAL"
-          if [ "$ATUAL" != "workflow" ]; then
-            gh api -X PUT "repos/${{ github.repository }}/pages" -f build_type=workflow >/dev/null
-            echo "build_type agora: $(gh api "repos/${{ github.repository }}/pages" --jq '.build_type')"
+          git fetch origin main
+          git checkout -B main origin/main
+          # Regera no checkout do branch: `dist/` é ignorado pelo git e sobrevive
+          # ao checkout, então os dados são os desta execução.
+          node scripts/build-site.mjs --dist dist --single-file --out index.html
+          if git diff --quiet -- index.html; then
+            echo "index.html já estava atualizado."
+            exit 0
           fi
-
-      - name: O Pages está em "GitHub Actions"?
-        id: pages
-        run: |
-          set -euo pipefail
-          # `build_type` é o que decide: `workflow` aceita o deploy-pages;
-          # `legacy` publica o branch e faria o deploy-pages falhar com
-          # "not configured to use GitHub Actions".
-          BUILD_TYPE=$(gh api "repos/${{ github.repository }}/pages" --jq '.build_type' 2>/dev/null || echo "ausente")
-          echo "Pages build_type: $BUILD_TYPE"
-          if [ "$BUILD_TYPE" = "workflow" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "### O site não foi publicado"
-              echo
-              echo "O Pages está em \`$BUILD_TYPE\`, não em \`workflow\`."
-              echo "Settings → Pages → Source: **GitHub Actions**."
-              echo
-              echo "O site gerado está no artefato \`giochi-os-site\` desta execução."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::Pages em '$BUILD_TYPE' — o site ficou no artefato giochi-os-site; troque a origem para GitHub Actions"
-          fi
-
-      - name: Preparar o site para o Pages
-        if: steps.pages.outputs.ready == 'true'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/dist
-
-  deploy:
-    name: Publicar o site
-    needs: publish
-    # A release dos artefatos é o produto; o site é hospedagem. Amarrar os dois
-    # faria uma configuração de Pages ausente apagar a release inteira.
-    if: needs.publish.outputs.pages_ready == 'true'
-    runs-on: ubuntu-24.04
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - name: Deploy
-        id: deploy
-        uses: actions/deploy-pages@v4
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "site: página de download da ${{ needs.discover.outputs.version }}" \
+              -- index.html
+          # O main pode ter andado durante o empacotamento; rebase antes de
+          # empurrar evita falhar por non-fast-forward no fim de tudo.
+          git push origin main || { git pull --rebase origin main && git push origin main; }
