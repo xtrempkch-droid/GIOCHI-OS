@@ -5,7 +5,7 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { loadApps } from "./apps.mjs";
+import { loadAppsFromRoots } from "./apps.mjs";
 import { compressFile } from "./compress.mjs";
 import { humanSize, isFile, sha256File, sizeOf, walk } from "./fs.mjs";
 import {
@@ -35,8 +35,10 @@ function copyTree(sourceDir, targetDir) {
  * Roda **antes** do build do sistema: o Giochi System consome este overlay ao
  * gerar a imagem. Apps de loja e em scaffold ficam de fora.
  */
-export async function runAppsPhase({ appsRoot, outDir }) {
-  const apps = await loadApps(appsRoot);
+export async function runAppsPhase({ appsRoot, appsRoots, outDir }) {
+  // `appsRoots` tem precedência: é a forma que suporta mais de um catálogo.
+  const roots = appsRoots && appsRoots.length > 0 ? appsRoots : [appsRoot].filter(Boolean);
+  const apps = await loadAppsFromRoots(roots);
   if (!apps.ok) {
     return { ok: false, apps, overlayDir: null, embedded: [], errors: apps.errors };
   }
@@ -128,6 +130,7 @@ function reconcileEmbedded(catalogEmbedded, inImage) {
 export async function runPackagePhase({
   systemDir,
   appsRoot,
+  appsRoots,
   outDir,
   version,
   compress,
@@ -204,8 +207,9 @@ export async function runPackagePhase({
   }
 
   let apps = { embedded: [], external: [], skipped: [], errors: [], warnings: [], ok: true };
-  if (appsRoot) {
-    apps = await loadApps(appsRoot);
+  const roots = appsRoots && appsRoots.length > 0 ? appsRoots : [appsRoot].filter(Boolean);
+  if (roots.length > 0) {
+    apps = await loadAppsFromRoots(roots);
     errors.push(...apps.errors);
     warnings.push(...apps.warnings);
     if (!apps.ok) {
@@ -300,7 +304,7 @@ export async function runPackagePhase({
   //   ext4 cru (alvo virtual)      `debugfs -w` escreve direto
   //   imagem de cartão (partição)  extrai a partição, altera, confere com
   //                                `e2fsck` e devolve ao offset
-  if (injectApps && appsRoot) {
+  if (injectApps && roots.length > 0) {
     const lerApps = () => (card ? readAppsFromCardImage(imageTarget) : readRootfsApps(imageTarget));
     const escrever = (overlayDir) =>
       card
@@ -331,7 +335,7 @@ export async function runPackagePhase({
     } else {
       const stagingBase = path.join(outDir, ".injeacao");
       rmSync(stagingBase, { recursive: true, force: true });
-      const overlay = await runAppsPhase({ appsRoot, outDir: stagingBase });
+      const overlay = await runAppsPhase({ appsRoots: roots, outDir: stagingBase });
       if (!overlay.ok) {
         rmSync(stagingBase, { recursive: true, force: true });
         errors.push(...overlay.errors);

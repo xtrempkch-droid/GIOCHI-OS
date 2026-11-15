@@ -126,8 +126,9 @@ Detalhes em [docs/site.md](docs/site.md).
 ## Comandos
 
 ```bash
-node tests/run-all.mjs                              # 42 testes
-node scripts/assemble.mjs apps --apps <app/> --out <staging>
+node tests/run-all.mjs                              # 51 testes
+node scripts/assemble.mjs apps --apps <app/> --out <staging>            # um catálogo
+node scripts/assemble.mjs apps --apps <app/>,<jogos/> --out <staging>   # dois
 node scripts/assemble.mjs package --system <out/device> --apps <app/> --out dist \
   --version 0.1.0 --compress xz
 node scripts/build-site.mjs --dist dist
@@ -160,7 +161,7 @@ Giochi os/
 
 ## Estado
 
-O que está **verificado**: 42 testes passando — junção, verificação de checksum,
+O que está **verificado**: 51 testes passando — junção, verificação de checksum,
 regra de licença, geração do site com links corretos, publicação de alvo virtual
 (disco + kernel), compressão e leitura do `index.json` de dentro do `rootfs.ext4`.
 

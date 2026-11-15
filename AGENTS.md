@@ -39,13 +39,13 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
   `compress`, `rootfs`, `qemu` e `names`.
 - `site/template.html` + `site/assets/style.css`, com card próprio para alvo
   virtual (bloco "Como iniciar no QEMU" e download do kernel).
-- 42 testes em `tests/pipeline.test.mjs`.
+- 51 testes em `tests/pipeline.test.mjs`.
 - Workflows: `validate.yml` (testes) e `release.yml` (release + Pages).
 - Documentação em `docs/` (3 páginas).
 
 ### Validado nesta sessão
 
-- `node tests/run-all.mjs` passou: **42/42**.
+- `node tests/run-all.mjs` passou: **51/51**.
 - Fluxo completo com uma saída de sistema **virtual** (kernel `Image` +
   `rootfs.ext4`): a fase `package` publicou
   `giochi-qemu-aarch64-0.1.0.img.xz` + `giochi-qemu-aarch64-0.1.0-Image.xz`,
@@ -335,3 +335,20 @@ Git. O `.gitignore` cobre isso.
   `make-sd-image.sh` com `sudo` só para device que declara firmware em
   `artifacts`, e devolve o dono dos arquivos com `chown` (o upload roda como o
   usuário do runner).
+
+## 7.4 Decisões (15/11/2026)
+
+- **`--apps` aceita vários catálogos.** O launcher e a loja vivem no Giochi app;
+  os jogos passam a viver em repositório próprio. Sem isso, embutir um jogo
+  exigiria copiar a pasta dele para o catálogo do outro repositório — o
+  acoplamento que o contrato existe para evitar. Flag repetida ou vírgula, e
+  `id` repetido entre catálogos é erro (dois apps com o mesmo id escreveriam em
+  `/opt/giochi/apps/<id>` e um apagaria o outro).
+- **As duas rotas de distribuição continuam valendo.** `image` embute no build;
+  `store` só lista em `apps.store` e o aparelho baixa depois. A escolha é de
+  licença e de ciclo de atualização, não técnica: GPL não entra na raiz
+  assinada, e app que muda toda semana não deveria exigir regravar o cartão.
+- **A release é uma só para todos os aparelhos.** O workflow descobre os
+  habilitados em `device/devices.json`, empacota em matriz e publica o site uma
+  vez. Publicar um device por execução sobrescreveria o Pages com uma página de
+  um card.

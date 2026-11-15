@@ -20,7 +20,7 @@ ext4 e reverter a assinatura — desfazendo justamente o que protege o sistema.
 
 ## Fase 1 — `apps`
 
-**Entrada:** `Giochi app/app/` (catálogo + pastas dos apps)
+**Entrada:** um ou mais catálogos (ver "Mais de um catálogo" abaixo)
 **Saída:** `staging/rootfs-overlay/opt/giochi/apps/`
 
 O que faz, para cada app de distribuição `image`:
@@ -287,3 +287,42 @@ do runner, que não lê arquivo de outro dono.
 
 O `qemu-aarch64` cai no `else` — não tem U-Boot nem layout de partição, e o
 `rootfs.ext4` dele já é o disco.
+
+## Mais de um catálogo (`--apps` repetido ou com vírgula)
+
+```bash
+# um catálogo
+node scripts/assemble.mjs apps --apps ../GIOCHI-APP/app --out staging
+
+# launcher num repositório, jogos em outro
+node scripts/assemble.mjs apps \
+  --apps ../GIOCHI-APP/app \
+  --apps ../GIOCHI-JOGOS/app \
+  --out staging
+
+# a mesma coisa, numa flag
+node scripts/assemble.mjs apps --apps ../GIOCHI-APP/app,../GIOCHI-JOGOS/app --out staging
+```
+
+Cada raiz precisa do seu `apps.json`. Os catálogos são **juntados**: os apps de
+imagem dos dois entram no mesmo overlay, os de loja na mesma lista, e o
+`index.json` sai único.
+
+`id` repetido entre catálogos é **erro**, não "o último vence": dois apps com o
+mesmo id escreveriam em `/opt/giochi/apps/<id>`, um apagaria o outro, e o
+`index.json` anunciaria os dois.
+
+### As duas rotas para um app de outro repositório
+
+| Como o app chega ao aparelho | No `apps.json` | O que a release faz |
+| --- | --- | --- |
+| embutido na imagem | `distribution: "image"` | copia `bin/` para o overlay |
+| baixado pela loja | `distribution: "store"` | só lista em `apps.store`, não embute |
+
+A primeira exige o app no build (mais um catálogo em `--apps`). A segunda não
+toca a imagem: o aparelho baixa depois, e a release publica o app em
+`apps.store` só para o site mostrar que ele existe e **não** está na imagem.
+
+A escolha não é técnica — é de licença e de ciclo de atualização. App GPL não
+pode entrar na raiz assinada (regra verificada na fase `apps`), e app que muda
+toda semana não deveria exigir regravar o cartão.

@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
-import { loadApps, pngSize } from "../scripts/lib/apps.mjs";
+import { loadApps, loadAppsFromRoots, pngSize } from "../scripts/lib/apps.mjs";
 import { isFile } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
 import {
@@ -1255,4 +1255,102 @@ test("site de cartão cru não mostra aviso de descompressão", async () => {
     const html = readFileSync(result.indexPath, "utf8");
     assert.doesNotMatch(html, /Descomprima antes de gravar/);
   });
+});
+
+// ── mais de um catálogo de apps ─────────────────────────────
+
+test("loadAppsFromRoots junta catálogos de repositórios diferentes", async () => {
+  // O caso real: launcher no catálogo do Giochi app, jogos no catálogo do
+  // repositório de jogos. Sem isto, embutir um jogo exigiria copiar a pasta
+  // dele para o outro repositório.
+  await withTempDirAsync(async (dir) => {
+    const launcherRoot = path.join(dir, "app");
+    const jogosRoot = path.join(dir, "jogos-apps");
+
+    makeRegistry(launcherRoot, [makeApp(launcherRoot, { id: "launcher" })]);
+    makeRegistry(jogosRoot, [
+      makeApp(jogosRoot, { id: "cobrinha" }),
+      makeApp(jogosRoot, { id: "loja-gpl", distribution: "store", license: "GPL-3.0-only" }),
+    ]);
+
+    const resultado = await loadAppsFromRoots([launcherRoot, jogosRoot]);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(
+      resultado.embedded.map((a) => a.id).sort(),
+      ["cobrinha", "launcher"],
+    );
+    assert.deepEqual(resultado.external.map((a) => a.id), ["loja-gpl"]);
+  });
+});
+
+test("loadAppsFromRoots recusa id repetido entre catálogos", async () => {
+  // Dois apps com o mesmo id escreveriam em `/opt/giochi/apps/<id>`: um apagaria
+  // o outro, e o `index.json` anunciaria os dois. Erro, não "o último vence".
+  await withTempDirAsync(async (dir) => {
+    const a = path.join(dir, "a");
+    const b = path.join(dir, "b");
+    makeRegistry(a, [makeApp(a, { id: "launcher" })]);
+    makeRegistry(b, [makeApp(b, { id: "launcher" })]);
+
+    const resultado = await loadAppsFromRoots([a, b]);
+    assert.equal(resultado.ok, false);
+    assert.ok(
+      resultado.errors.some((e) => e.code === "id_duplicado"),
+      JSON.stringify(resultado.errors),
+    );
+  });
+});
+
+test("fase apps monta um overlay só com dois catálogos", async () => {
+  await withTempDirAsync(async (dir) => {
+    const a = path.join(dir, "a");
+    const b = path.join(dir, "b");
+    makeRegistry(a, [makeApp(a, { id: "launcher" })]);
+    makeRegistry(b, [makeApp(b, { id: "cobrinha" })]);
+
+    const outDir = path.join(dir, "staging");
+    const resultado = await runAppsPhase({ appsRoots: [a, b], outDir });
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+
+    const appsDir = path.join(outDir, "rootfs-overlay", "opt", "giochi", "apps");
+    const index = JSON.parse(readFileSync(path.join(appsDir, "index.json"), "utf8"));
+    assert.deepEqual(index.apps.map((x) => x.id).sort(), ["cobrinha", "launcher"]);
+    assert.equal(isFile(path.join(appsDir, "launcher", "bin", "tool")), true);
+    assert.equal(isFile(path.join(appsDir, "cobrinha", "bin", "tool")), true);
+  });
+});
+
+test("fase package inclui apps de catálogos diferentes no manifesto", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "dev");
+    makeSystemOutput(systemDir);
+    const a = path.join(dir, "a");
+    const b = path.join(dir, "b");
+    makeRegistry(a, [makeApp(a, { id: "launcher" })]);
+    makeRegistry(b, [makeApp(b, { id: "cobrinha" })]);
+
+    const resultado = await runPackagePhase({
+      systemDir,
+      appsRoots: [a, b],
+      outDir: path.join(dir, "dist"),
+      version: "1.0.0",
+    });
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(
+      resultado.release.apps.embedded.map((x) => x.id).sort(),
+      ["cobrinha", "launcher"],
+    );
+  });
+});
+
+test("o CLI aceita --apps repetido e separado por vírgula", () => {
+  // O `parseArgs` guarda só o último valor de uma flag repetida — por isso há
+  // um coletor dedicado. Este teste lê o código do CLI porque spawnar falha sob
+  // o sandbox (ver o cabeçalho deste arquivo); a lógica em si está coberta
+  // pelos testes de `loadAppsFromRoots` acima.
+  const fonte = readFileSync(path.join(ROOT, "scripts", "assemble.mjs"), "utf8");
+  assert.match(fonte, /function coletarApps/, "o coletor tem de existir");
+  assert.match(fonte, /split\(","\)/, "aceita vírgula");
+  assert.match(fonte, /runAppsPhase\(\{ appsRoots/, "a fase apps recebe as raízes");
+  assert.match(fonte, /runPackagePhase\(\{[\s\S]*?appsRoots:/, "a fase package também");
 });

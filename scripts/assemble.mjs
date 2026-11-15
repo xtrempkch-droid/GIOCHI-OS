@@ -5,9 +5,36 @@
 // Uso:
 //   node scripts/assemble.mjs apps    --apps <Giochi app/app> --out <staging>
 //   node scripts/assemble.mjs package --system <out/device> --apps <...> --out <dist> [--version v]
+//
+// `--apps` aceita VÁRIOS catálogos, separados por vírgula ou repetindo a flag:
+//
+//   --apps ../GIOCHI-APP/app,../GIOCHI-GAMES/app
+//
+// Cada caminho precisa do seu `apps.json`. É o que permite os jogos morarem num
+// repositório próprio sem copiar pasta para o catálogo do launcher.
 import path from "node:path";
 
 import { runAppsPhase, runPackagePhase } from "./lib/pipeline.mjs";
+
+/**
+ * Coleta `--apps` (repetível e/ou separado por vírgula).
+ *
+ * O `parseArgs` guarda só o último valor de uma flag repetida; aqui a flag é
+ * acumulada, porque o uso real é "o catálogo do launcher e o dos jogos".
+ */
+function coletarApps(argv) {
+  const caminhos = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== "--apps") continue;
+    const valor = argv[i + 1];
+    if (!valor || valor.startsWith("--")) continue;
+    for (const parte of valor.split(",")) {
+      const limpo = parte.trim();
+      if (limpo) caminhos.push(limpo);
+    }
+  }
+  return caminhos;
+}
 
 function parseArgs(argv) {
   const [command, ...rest] = argv;
@@ -32,10 +59,12 @@ function printIssues(errors, warnings) {
   for (const warning of warnings) console.log(`  aviso [${warning.code}] ${warning.message}`);
 }
 
-const args = parseArgs(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = parseArgs(argv);
+const appsPaths = coletarApps(argv);
 
 if (args.command === "apps") {
-  if (!args.apps) {
+  if (appsPaths.length === 0) {
     console.error("ERRO: faltou --apps <caminho do app/ do Giochi app>");
     process.exit(2);
   }
@@ -44,15 +73,15 @@ if (args.command === "apps") {
     process.exit(2);
   }
 
-  const appsRoot = path.resolve(args.apps);
+  const appsRoots = appsPaths.map((p) => path.resolve(p));
   const outDir = path.resolve(args.out);
 
   console.log("Giochi os — fase apps");
-  console.log(`  catálogo: ${appsRoot}`);
+  for (const raiz of appsRoots) console.log(`  catálogo: ${raiz}`);
   console.log(`  saída:    ${outDir}`);
   console.log();
 
-  const result = await runAppsPhase({ appsRoot, outDir });
+  const result = await runAppsPhase({ appsRoots, outDir });
   printIssues(result.errors, result.warnings ?? []);
   for (const item of result.skipped ?? []) console.log(`  pulado ${item.id}: ${item.reason}`);
 
@@ -87,7 +116,7 @@ if (args.command === "package") {
 
   const result = await runPackagePhase({
     systemDir: path.resolve(args.system),
-    appsRoot: args.apps ? path.resolve(args.apps) : null,
+    appsRoots: appsPaths.map((p) => path.resolve(p)),
     outDir: path.resolve(args.out),
     version: args.version && args.version !== true ? String(args.version) : undefined,
     compress: args.compress && args.compress !== true ? String(args.compress) : null,

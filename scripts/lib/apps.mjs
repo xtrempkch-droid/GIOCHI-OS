@@ -224,3 +224,61 @@ export async function loadApps(appsRoot) {
     warnings,
   };
 }
+
+/**
+ * Carrega VÁRIOS catálogos e junta num só.
+ *
+ * Existe porque um projeto não cabe mais num `apps.json`: o launcher e a loja
+ * vivem no repositório do Giochi app, e os jogos passam a viver no deles. Sem
+ * isto, embutir um jogo exigiria copiar a pasta dele para o catálogo do outro
+ * repositório — que é exatamente o acoplamento que o contrato evita.
+ *
+ * Cada raiz precisa ter o seu `apps.json`. As classificações (`embedded`,
+ * `external`, `skipped`) são concatenadas, e a versão de cada app vem do
+ * `metadata.json` da própria pasta, não do índice.
+ *
+ * `id` repetido entre catálogos é ERRO, não "o último vence": dois apps com o
+ * mesmo id escreveriam em `/opt/giochi/apps/<id>` e um apagaria o outro — com
+ * o `index.json` anunciando os dois.
+ */
+export async function loadAppsFromRoots(roots) {
+  const errors = [];
+  const warnings = [];
+  const embedded = [];
+  const external = [];
+  const skipped = [];
+  const origem = new Map();
+
+  for (const root of roots) {
+    const resultado = await loadApps(root);
+    errors.push(...resultado.errors);
+    warnings.push(...resultado.warnings);
+    skipped.push(...resultado.skipped);
+
+    for (const app of resultado.embedded) {
+      if (origem.has(app.id)) {
+        errors.push({
+          code: "id_duplicado",
+          message: `app "${app.id}" aparece em ${origem.get(app.id)} e em ${root}`,
+        });
+        continue;
+      }
+      origem.set(app.id, root);
+      embedded.push(app);
+    }
+
+    for (const app of resultado.external) {
+      if (origem.has(app.id)) {
+        errors.push({
+          code: "id_duplicado",
+          message: `app "${app.id}" aparece em ${origem.get(app.id)} e em ${root}`,
+        });
+        continue;
+      }
+      origem.set(app.id, root);
+      external.push(app);
+    }
+  }
+
+  return { ok: errors.length === 0, embedded, external, skipped, errors, warnings };
+}
