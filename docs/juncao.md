@@ -37,7 +37,14 @@ O overlay é consumido pelo Giochi System como `BR2_ROOTFS_OVERLAY` adicional.
 ## Fase 2 — `package`
 
 **Entrada:** `Giochi System/out/<device>/`
-**Saída:** `dist/` com imagem renomeada, `release.json`, `SHA256SUMS`, `README.txt`
+**Saída:** `dist/<device>/` com imagem renomeada, `release.json`, `SHA256SUMS`,
+`README.txt`
+
+Os três últimos têm o mesmo nome em todo aparelho. Isso vale dentro de
+`dist/<device>/`, mas **não** na release do GitHub, onde os anexos são planos e
+um sobrescreveria o outro: antes de publicar, `scripts/flatten-release.mjs` os
+renomeia para `<device>-SHA256SUMS`, `<device>-README.txt` e
+`<device>-release.json`, e ajusta o `sha256sum -c` citado no README.
 
 O que faz:
 
