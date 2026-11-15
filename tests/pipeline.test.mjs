@@ -2314,3 +2314,66 @@ test("placeholder que sobra no template é erro, não comentário invisível", (
     assert.match(resultado.errors[0].message, /INEXISTENTE/);
   });
 });
+
+test("a página carrega depois do flatten, quando o manifesto sai da pasta", () => {
+  // O `flatten-release` move `dist/<device>/release.json` para
+  // `dist/<device>-release.json` — se não movesse, os manifestos colidiriam na
+  // release. O gerador tem de aceitar os dois layouts: no CI ele roda DEPOIS do
+  // flatten, e falhou em produção com "nenhum release.json encontrado" quando
+  // só aceitava o primeiro.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const antes = readFileSync(path.join(dist, "qemu-aarch64", "release.json"), "utf8");
+
+    // Simula o flatten: manifesto para fora, com o nome da release.
+    write(path.join(dist, "qemu-aarch64-release.json"), antes);
+    rmSync(path.join(dist, "qemu-aarch64", "release.json"));
+    write(path.join(dist, "powkiddy-x55-release.json"), readFileSync(path.join(dist, "powkiddy-x55", "release.json"), "utf8"));
+    rmSync(path.join(dist, "powkiddy-x55", "release.json"));
+
+    const out = path.join(dir, "index.html");
+    const resultado = generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.releases.map((r) => r.device.id), ["powkiddy-x55", "qemu-aarch64"]);
+    // O `__dir` tem de voltar para a pasta do aparelho — é de lá que o modo
+    // local copia as imagens.
+    assert.equal(path.basename(resultado.releases[1].__dir), "qemu-aarch64");
+  });
+});
+
+test("os dois layouts produzem os mesmos links", () => {
+  // Um layout que gera link diferente é uma página que muda por acidente.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const ler = (nome) => {
+      const out = path.join(dir, nome);
+      generateSite({
+        distDir: dist,
+        outDir: out,
+        templatePath: path.join(ROOT, "site", "template.html"),
+        stylePath: path.join(ROOT, "site", "assets", "style.css"),
+        singleFile: true,
+        repo: "dono/repo",
+      });
+      return [...readFileSync(out, "utf8").matchAll(/https:\/\/github\.com[^"]*/g)]
+        .map((m) => m[0])
+        .sort();
+    };
+    const porPasta = ler("a.html");
+
+    for (const device of ["powkiddy-x55", "qemu-aarch64"]) {
+      write(path.join(dist, `${device}-release.json`), readFileSync(path.join(dist, device, "release.json"), "utf8"));
+      rmSync(path.join(dist, device, "release.json"));
+    }
+
+    assert.deepEqual(ler("b.html"), porPasta);
+  });
+});

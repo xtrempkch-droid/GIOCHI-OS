@@ -72,12 +72,27 @@ export function collectReleases(distDir) {
   }
 
   for (const relative of walk(distDir)) {
-    if (path.basename(relative) !== "release.json") continue;
+    // Dois layouts, e os dois acontecem de verdade:
+    //
+    //   dist/<device>/release.json      saída da fase `package`
+    //   dist/<device>-release.json      depois do `flatten`, que tira o
+    //                                   manifesto de dentro da pasta para os
+    //                                   anexos não colidirem na release
+    //
+    // Aceitar só o primeiro fazia `--single-file` falhar no CI com "nenhum
+    // release.json encontrado" — depois de a release já ter sido publicada.
+    const base = path.basename(relative);
+    if (base !== "release.json" && !base.endsWith("-release.json")) continue;
+
     const full = path.join(distDir, relative);
     try {
       const release = readJson(full, "release.json");
-      release.__dir = path.dirname(full);
-      release.__relative = path.dirname(relative).split(path.sep).join("/");
+      const holder = path.dirname(full);
+      // No layout achatado o manifesto fica AO LADO da pasta do aparelho, e é
+      // lá que as imagens estão.
+      const irmao = path.join(holder, release.device?.id || "");
+      release.__dir = isDir(irmao) ? irmao : holder;
+      release.__relative = path.relative(distDir, release.__dir).split(path.sep).join("/");
       releases.push(release);
     } catch (error) {
       problems.push({ message: `${relative}: ${error.message}` });
