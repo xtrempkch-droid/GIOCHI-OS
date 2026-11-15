@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { loadAppsFromRoots } from "./apps.mjs";
 import { compressFile } from "./compress.mjs";
+import { observacoesDe } from "./device-notes.mjs";
 import { humanSize, isFile, sha256File, sizeOf } from "./fs.mjs";
 import {
   injectIntoCardImage,
@@ -434,6 +435,11 @@ export async function runPackagePhase({
       name: String(device.name || deviceId),
       arch: String(device.arch || "unknown"),
       kind: virtual ? "virtual" : "card",
+      // O que muda a decisão de quem vai baixar: painel de referência,
+      // aparelhos compatíveis, hardware ainda não ligado. Sempre uma lista —
+      // vazia quando não há nada a avisar, para o consumidor não precisar
+      // testar dois formatos.
+      observations: observacoesDe(deviceId),
     },
     system: {
       version: releaseVersion,

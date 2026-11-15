@@ -196,6 +196,9 @@ export const TEXTOS = {
     "foot.code": "code",
     "foot.releases": "releases",
     "foot.docs": "technical documentation",
+    "note.title": "Notes",
+    "note.painel": "Built and tested with the <code>{modelo}</code> screen. Units with {outros} need another build — the panel has no EDID, so the system cannot detect it.",
+    "note.compat": "Also runs on some units of {lista} and variants (same board).",
   },
 
   zh: {
@@ -328,6 +331,9 @@ export const TEXTOS = {
     "foot.code": "代码",
     "foot.releases": "版本发布",
     "foot.docs": "技术文档",
+    "note.title": "注意事项",
+    "note.painel": "使用 <code>{modelo}</code> 屏幕构建并测试。配备 {outros} 的机器需要另外构建 —— 屏幕没有 EDID，系统无法自动识别。",
+    "note.compat": "也适用于部分 {lista} 及同系变体（同一主板）。",
   },
 
   hi: {
@@ -463,6 +469,9 @@ export const TEXTOS = {
     "foot.code": "कोड",
     "foot.releases": "रिलीज़",
     "foot.docs": "तकनीकी दस्तावेज़",
+    "note.title": "ध्यान दें",
+    "note.painel": "<code>{modelo}</code> स्क्रीन के साथ बनाया और जाँचा गया। {outros} वाली इकाइयों के लिए दूसरी बिल्ड चाहिए — पैनल में EDID नहीं होता, इसलिए सिस्टम उसे पहचान नहीं सकता।",
+    "note.compat": "{lista} की कुछ इकाइयों और उनके वेरिएंट पर भी चलता है (एक ही बोर्ड)।",
   },
 
   es: {
@@ -601,6 +610,9 @@ export const TEXTOS = {
     "foot.code": "código",
     "foot.releases": "versiones",
     "foot.docs": "documentación técnica",
+    "note.title": "Observaciones",
+    "note.painel": "Construida y probada con la pantalla <code>{modelo}</code>. Las unidades con {outros} necesitan otra compilación — el panel no tiene EDID, así que el sistema no puede detectarlo.",
+    "note.compat": "También funciona en algunas unidades del {lista} y variantes (misma placa).",
   },
 
   fr: {
@@ -739,6 +751,9 @@ export const TEXTOS = {
     "foot.code": "code",
     "foot.releases": "versions",
     "foot.docs": "documentation technique",
+    "note.title": "Remarques",
+    "note.painel": "Construite et testée avec l'écran <code>{modelo}</code>. Les unités avec {outros} nécessitent une autre compilation — le panneau n'a pas d'EDID, le système ne peut donc pas le détecter.",
+    "note.compat": "Fonctionne aussi sur certaines unités du {lista} et variantes (même carte).",
   },
 
   ar: {
@@ -873,6 +888,9 @@ export const TEXTOS = {
     "foot.code": "الشيفرة",
     "foot.releases": "الإصدارات",
     "foot.docs": "الوثائق التقنية",
+    "note.title": "ملاحظات",
+    "note.painel": "بُنيت وجُرّبت مع شاشة <code>{modelo}</code>. الوحدات التي بها {outros} تحتاج بناءً آخر — الشاشة بلا EDID، فلا يستطيع النظام التعرّف عليها.",
+    "note.compat": "تعمل أيضًا على بعض وحدات {lista} وأشباهها (اللوحة نفسها).",
   },
 
   bn: {
@@ -1007,6 +1025,9 @@ export const TEXTOS = {
     "foot.code": "কোড",
     "foot.releases": "রিলিজ",
     "foot.docs": "প্রযুক্তিগত নথি",
+    "note.title": "লক্ষণীয়",
+    "note.painel": "<code>{modelo}</code> স্ক্রিন দিয়ে তৈরি ও পরীক্ষিত। {outros} থাকা ইউনিটে অন্য বিল্ড দরকার — প্যানেলে EDID নেই, তাই সিস্টেম এটি শনাক্ত করতে পারে না।",
+    "note.compat": "{lista}-এর কিছু ইউনিট ও ভ্যারিয়েন্টেও চলে (একই বোর্ড)।",
   },
 
   pt: {
@@ -1144,6 +1165,9 @@ export const TEXTOS = {
     "foot.code": "código",
     "foot.releases": "releases",
     "foot.docs": "documentação técnica",
+    "note.title": "Observações",
+    "note.painel": "Construída e testada com a tela <code>{modelo}</code>. Unidades com {outros} precisam de outra build — o painel não tem EDID, então o sistema não consegue detectá-lo.",
+    "note.compat": "Também roda em algumas unidades do {lista} e variantes (mesma placa).",
   },
 
   ru: {
@@ -1282,6 +1306,9 @@ export const TEXTOS = {
     "foot.code": "код",
     "foot.releases": "версии",
     "foot.docs": "техническая документация",
+    "note.title": "Примечания",
+    "note.painel": "Собрано и проверено с экраном <code>{modelo}</code>. Устройствам с {outros} нужна другая сборка — у панели нет EDID, поэтому система не может её определить.",
+    "note.compat": "Также работает на части устройств {lista} и их вариантах (та же плата).",
   },
 
   ur: {
@@ -1416,11 +1443,24 @@ export const TEXTOS = {
     "foot.code": "کوڈ",
     "foot.releases": "ریلیز",
     "foot.docs": "تکنیکی دستاویزات",
+    "note.title": "ملاحظات",
+    "note.painel": "<code>{modelo}</code> اسکرین کے ساتھ بنایا اور جانچا گیا۔ {outros} والی اکائیوں کے لیے دوسری بلڈ درکار ہے — پینل میں EDID نہیں، اس لیے نظام اسے پہچان نہیں سکتا۔",
+    "note.compat": "{lista} کی کچھ اکائیوں اور ان کے متبادلوں پر بھی چلتا ہے (ایک ہی بورڈ)۔",
   },
 };
 
 /** Tags permitidas em `data-i18n-html`. Qualquer outra é recusada. */
 export const TAGS_PERMITIDAS = ["code", "strong", "em"];
+
+/**
+ * Marcadores que o código substitui.
+ *
+ * `n`, `size` e `data` vêm dos `data-i18n-vars` de cada elemento; `modelo`,
+ * `outros` e `lista` vêm das observações por aparelho (`device-notes.mjs`).
+ * Um marcador fora desta lista nunca é substituído e apareceria literal na
+ * tela — por isso a validação recusa.
+ */
+export const MARCADORES_PERMITIDOS = ["n", "size", "data", "modelo", "outros", "lista"];
 
 /**
  * Problemas no dicionário: chave faltando, tag não permitida, idioma sem texto.
@@ -1457,7 +1497,7 @@ export function validarTraducoes() {
       }
       // Marcadores usados no texto têm de ser só os que o script substitui.
       for (const m of valor.matchAll(/\{(\w+)\}/g)) {
-        if (!["n", "size", "data"].includes(m[1])) {
+        if (!MARCADORES_PERMITIDOS.includes(m[1])) {
           problemas.push(`${idioma.code}: "${chave}" usa marcador desconhecido {${m[1]}}`);
         }
       }

@@ -258,6 +258,22 @@ const SCRIPT_IDIOMA = String.raw`
     return null;
   }
 
+  // Substitui {n}, {size}, {modelo}… pelos valores do próprio elemento.
+  // Precisa valer para as duas formas de marcacao: as observacoes de aparelho
+  // usam a variante HTML (tem tag code) e levam o painel e os aparelhos
+  // compativeis nas variaveis — sem isto, o texto trocava de idioma e deixava
+  // o marcador cru na tela.
+  function comVars(elemento, texto) {
+    var vars = elemento.getAttribute("data-i18n-vars");
+    if (!vars) return texto;
+    var mapa;
+    try { mapa = JSON.parse(vars); } catch (e) { return texto; }
+    for (var k in mapa) {
+      texto = texto.split("{" + k + "}").join(mapa[k]);
+    }
+    return texto;
+  }
+
   function aplicar(codigo) {
     var idioma = porCodigo(codigo);
     if (!idioma) return false;
@@ -270,20 +286,13 @@ const SCRIPT_IDIOMA = String.raw`
       var chave = alvos[i].getAttribute("data-i18n");
       var valor = t[chave];
       if (valor == null) continue;
-      var vars = alvos[i].getAttribute("data-i18n-vars");
-      if (vars) {
-        var mapa = JSON.parse(vars);
-        for (var k in mapa) {
-          valor = valor.split("{" + k + "}").join(mapa[k]);
-        }
-      }
-      alvos[i].textContent = valor;
+      alvos[i].textContent = comVars(alvos[i], valor);
     }
 
     var comHtml = document.querySelectorAll("[data-i18n-html]");
     for (var j = 0; j < comHtml.length; j += 1) {
       var k2 = comHtml[j].getAttribute("data-i18n-html");
-      if (t[k2] != null) comHtml[j].innerHTML = t[k2];
+      if (t[k2] != null) comHtml[j].innerHTML = comVars(comHtml[j], t[k2]);
     }
 
     var comConteudo = document.querySelectorAll("[data-i18n-content]");
@@ -353,6 +362,44 @@ function appsDe(release) {
   return [...(apps.embedded || []), ...(apps.store || [])];
 }
 
+/**
+ * Observações do aparelho, como lista traduzível.
+ *
+ * Cada item é um `<li>` com `data-i18n` e `data-i18n-vars`: a FRASE vem do
+ * dicionário (traduzida nos dez idiomas) e o DADO (`panel4`, `R36S`) vem de
+ * `device-notes.mjs`. Escrever a frase inteira no dado a deixaria só em
+ * português no meio de uma página em árabe.
+ *
+ * Fica FORA do `<details>` e antes dos botões: é aviso, não detalhe. Esconder
+ * "esta imagem foi testada com outro painel" atrás de um clique é o mesmo que
+ * não avisar.
+ */
+function renderObservacoes(release) {
+  const notas = release.device?.observations || [];
+  if (notas.length === 0) return "";
+
+  const itens = notas
+    .map((nota) => {
+      const vars = {};
+      for (const [chave, valor] of Object.entries(nota.vars || {})) {
+        vars[chave] = Array.isArray(valor) ? valor.join(", ") : String(valor);
+      }
+      return (
+        `<li data-i18n-html="note.${escapeHtml(nota.tipo)}" ` +
+        `data-i18n-vars='${jsonAtributo(vars)}'></li>`
+      );
+    })
+    .join("\n          ");
+
+  return `
+      <aside class="notas">
+        <h3 data-i18n="note.title"></h3>
+        <ul>
+          ${itens}
+        </ul>
+      </aside>`;
+}
+
 /** Card de um aparelho: o que baixar, quanto pesa, o que tem dentro. */
 function renderRelease(release) {
   const device = release.device || {};
@@ -411,7 +458,7 @@ function renderRelease(release) {
       </dl>
 
       ${sha ? `<p class="sha" dir="ltr">sha256 ${escapeHtml(sha)}</p>` : ""}
-
+${renderObservacoes(release)}
       ${
         appList
           ? `<details><summary data-i18n="card.showApps" data-i18n-vars='${jsonAtributo({ n: appsDe(release).length })}'></summary><ul class="apps">${appList}</ul></details>`
@@ -508,7 +555,11 @@ function renderDeviceRows(releases) {
       const system = release.system || {};
       const size = system.sizeHuman || (system.sizeBytes ? humanSize(system.sizeBytes) : "—");
       return `            <tr id="aparelho-${escapeHtml(device.id || "?")}">
-              <td><a href="#${escapeHtml(deviceAnchor(release))}">${escapeHtml(device.name || device.id || "?")}</a></td>
+              <td><a href="#${escapeHtml(deviceAnchor(release))}">${escapeHtml(device.name || device.id || "?")}</a>${
+                (release.device?.observations || []).length > 0
+                  ? ' <span class="marca-nota" aria-hidden="true" title="observações">•</span>'
+                  : ""
+              }</td>
               <td class="mono">${escapeHtml(device.id || "?")}</td>
               <td>${escapeHtml(device.arch || "—")}</td>
               <td data-i18n="${isVirtualRelease(release) ? "card.kindVirtual" : "card.kindCard"}"></td>

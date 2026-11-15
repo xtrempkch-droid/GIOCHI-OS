@@ -15,6 +15,7 @@ import zlib from "node:zlib";
 
 import { loadApps, loadAppsFromRoots, pngSize } from "../scripts/lib/apps.mjs";
 import { ehDeDesenvolvimento, faltandoNoCheckout } from "../scripts/lib/checkout.mjs";
+import { observacoesDe, TIPOS_DE_OBSERVACAO } from "../scripts/lib/device-notes.mjs";
 import { IDIOMAS, PADRAO, TEXTOS, validarTraducoes } from "../scripts/lib/i18n.mjs";
 import { isFile, walk } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
@@ -116,7 +117,10 @@ function makeRegistry(appsRoot, entries) {
   );
 }
 
-function makeSystemOutput(dir, { imageName = "test.img", tamper = false, partitionTable = false } = {}) {
+function makeSystemOutput(
+  dir,
+  { imageName = "test.img", tamper = false, partitionTable = false, deviceId = "qemu-aarch64", deviceName = "QEMU AArch64 Virt" } = {},
+) {
   // `partitionTable` escreve a assinatura 0x55AA em 510, que é o que separa um
   // disco de um blob de boot. Sem ela, o arquivo é "uma imagem sem tabela" — o
   // que continua sendo aceito, por queda.
@@ -130,7 +134,7 @@ function makeSystemOutput(dir, { imageName = "test.img", tamper = false, partiti
   write(path.join(dir, imageName), image);
   write(
     path.join(dir, "device.json"),
-    JSON.stringify({ id: "qemu-aarch64", name: "QEMU AArch64 Virt", arch: "arm64", buildroot: "2024.02" }),
+    JSON.stringify({ id: deviceId, name: deviceName, arch: "arm64", buildroot: "2024.02" }),
   );
   write(path.join(dir, "build-info.txt"), "name=Giochi System\nbuildroot=2024.02\n");
   write(path.join(dir, "SHA256SUMS"), `${sha256(image)}  ${imageName}\n`);
@@ -2161,7 +2165,18 @@ function makeSiteFixture(dir) {
     path.join(card, "release.json"),
     JSON.stringify({
       schemaVersion: 2,
-      device: { id: "powkiddy-x55", name: "Powkiddy X55", arch: "arm64", kind: "card" },
+      device: {
+        id: "powkiddy-x55",
+        name: "Powkiddy X55",
+        arch: "arm64",
+        kind: "card",
+        // Observação no fixture de propósito: é o que faz as chaves `note.*` do
+        // dicionário aparecerem no HTML e serem cobradas pelo teste de chaves.
+        observations: [
+          { tipo: "painel", vars: { modelo: "panel4", outros: ["panel1", "panel2"] } },
+          { tipo: "compat", vars: { lista: ["R36S"] } },
+        ],
+      },
       system: {
         version: "1.2.3",
         buildroot: "2025.02",
@@ -2546,4 +2561,96 @@ test("o seletor lista os dez, cada um no próprio alfabeto", () => {
     }
     assert.equal([...html.matchAll(/data-lang="/g)].length, 10);
   });
+});
+
+// ── observações por aparelho ────────────────────────────────
+
+test("o R35S publica a observação de painel e a de compatibilidade", () => {
+  // O mesmo aparelho sai de fábrica com cinco painéis e nenhum EDID para
+  // descobrir qual é. Quem baixa sem saber disso grava o cartão e vê tela preta
+  // — e o sintoma parece build quebrada.
+  const notas = observacoesDe("r35s");
+  assert.deepEqual(notas.map((n) => n.tipo), ["painel", "compat"]);
+  assert.equal(notas[0].vars.modelo, "panel4");
+  assert.deepEqual(notas[0].vars.outros, ["panel1", "panel2", "panel3"]);
+  assert.deepEqual(notas[1].vars.lista, ["R36S", "R33S"]);
+});
+
+test("aparelho sem observação devolve lista vazia, não undefined", () => {
+  // O consumidor não pode ter de testar dois formatos.
+  assert.deepEqual(observacoesDe("qemu-aarch64"), []);
+  assert.deepEqual(observacoesDe("aparelho-que-nao-existe"), []);
+  assert.deepEqual(observacoesDe(undefined), []);
+});
+
+test("todo tipo de observação tem frase nos dez idiomas", () => {
+  // Um tipo sem frase apareceria como chave crua na tela.
+  for (const tipo of TIPOS_DE_OBSERVACAO) {
+    for (const idioma of IDIOMAS) {
+      const texto = TEXTOS[idioma.code][`note.${tipo}`];
+      assert.ok(texto && texto.trim(), `${idioma.code}: falta note.${tipo}`);
+    }
+  }
+  for (const idioma of IDIOMAS) {
+    assert.ok(TEXTOS[idioma.code]["note.title"], `${idioma.code}: falta note.title`);
+  }
+});
+
+test("as observações chegam ao card fora do <details>", () => {
+  // Aviso escondido atrás de um clique é aviso que ninguém lê.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const out = path.join(dir, "index.html");
+    generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+    const html = readFileSync(out, "utf8");
+    const notas = html.slice(html.indexOf('<aside class="notas">'), html.indexOf("</aside>"));
+    assert.ok(notas.length > 0, "o bloco de observações tem de existir");
+    assert.ok(notas.includes('data-i18n-html="note.painel"'), "falta a nota de painel");
+    assert.ok(notas.includes('data-i18n-html="note.compat"'), "falta a nota de compatibilidade");
+    assert.ok(!notas.includes("<details"), "observação não fica dentro de <details>");
+    // O dado do aparelho vai nas variáveis, não na frase.
+    assert.ok(notas.includes("panel4"), "o modelo do painel tem de estar no HTML");
+    assert.ok(notas.includes("R36S"), "a compatibilidade tem de estar no HTML");
+  });
+});
+
+test("o pipeline leva as observações para o release.json", async () => {
+  // Sem isto a nota existiria só neste repositório e o site não teria como saber.
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "r35s");
+    makeSystemOutput(systemDir, { deviceId: "r35s", deviceName: "R35S" });
+    const appsRoot = path.join(dir, "app");
+    makeRegistry(appsRoot, [makeApp(appsRoot, { id: "launcher" })]);
+
+    const resultado = await runPackagePhase({
+      systemDir,
+      appsRoots: [appsRoot],
+      outDir: path.join(dir, "dist"),
+      version: "1.0.0",
+    });
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(
+      resultado.release.device.observations.map((n) => n.tipo),
+      ["painel", "compat"],
+    );
+  });
+});
+
+test("o script troca de idioma substituindo as variáveis também no HTML", () => {
+  // O script do navegador tem duas listas (`data-i18n` e `data-i18n-html`) e as
+  // observações de aparelho usam a segunda, com variáveis. Sem isso, o texto
+  // trocava de idioma e deixava `{modelo}` cru na tela — invisível para quem
+  // tem o idioma do navegador igual ao padrão, que é o caso de quem testa.
+  const fonte = readFileSync(path.join(ROOT, "scripts", "lib", "site.mjs"), "utf8");
+  const script = fonte.slice(fonte.indexOf("const SCRIPT_IDIOMA"));
+  assert.match(script, /function comVars\(/, "tem de existir uma função de substituição");
+  assert.match(script, /comHtml\[j\]\.innerHTML = comVars\(comHtml\[j\], t\[k2\]\)/);
+  assert.match(script, /alvos\[i\]\.textContent = comVars\(alvos\[i\], valor\)/);
 });

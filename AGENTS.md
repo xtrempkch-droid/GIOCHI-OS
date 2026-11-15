@@ -101,6 +101,8 @@ Giochi os/
 │       ├── inject.mjs         # escreve overlay no ext4 sem montar
 │       ├── qemu.mjs           # comando de boot do alvo virtual
 │       ├── release-assets.mjs # layout + nomes dos anexos da release
+│       ├── i18n.mjs           # os dez idiomas e a validação do dicionário
+│       ├── device-notes.mjs   # observações por aparelho (dado, não frase)
 │       ├── checkout.mjs       # o que é do app × o que é de desenvolvimento
 │       └── names.mjs          # nome cru × nome comprimido
 ├── site/
@@ -663,3 +665,34 @@ Verificado num DOM de verdade (`jsdom`, fora do repositório): os dez idiomas
 aplicam, `dir` muda para RTL em árabe e urdu, a detecção pelo navegador escolhe
 o idioma certo, idioma fora da lista cai no inglês, o clique troca, e nenhum dos
 96 elementos traduzíveis fica vazio. 105 testes verdes.
+
+## 7.11 Decisões (15/11/2026, observações por aparelho)
+
+Alguns aparelhos precisam de um aviso que muda a decisão de quem vai baixar.
+O R35S é o caso: o mesmo modelo sai de fábrica com **cinco painéis** medidos
+(`device/r35s/panels/`), sem EDID para descobrir qual é — DSI não tem. Esta
+imagem referencia o `panel4`; unidade com `panel1`/`panel2`/`panel3` precisa de
+outra build. E a placa é a mesma do R36S, então a imagem roda em algumas
+unidades dele e variantes.
+
+- **A frase é traduzida, o dado não.** `device-notes.mjs` guarda o dado
+  (`panel4`, `["R36S","R33S"]`); a frase vive no dicionário dos dez idiomas com
+  marcadores (`{modelo}`, `{outros}`, `{lista}`). Escrever a frase inteira no
+  dado a deixaria em português no meio de uma página em árabe.
+- **A nota fica FORA do `<details>`.** Aviso escondido atrás de um clique é
+  aviso que ninguém lê. Ela aparece entre o sha256 e os botões de download —
+  antes de baixar, não depois.
+- **A nota mora aqui, não no `device.json`.** Ela é sobre o que foi publicado e
+  testado, não sobre o hardware em abstrato: o `device.json` diria "panel4" mesmo
+  que o build passasse a usar outro painel de referência, sem reescrever a
+  frase. O custo é que esta lista envelhece junto com o build — quando o painel
+  de referência mudar no Giochi System, o campo `painel` aqui muda também.
+- **Lista vazia, nunca `undefined`.** `release.json` sempre traz
+  `device.observations` como lista; aparelho sem nota traz `[]`, para o
+  consumidor não precisar testar dois formatos.
+
+Medido no caminho: o script do navegador tinha duas listas (`data-i18n` e
+`data-i18n-html`) e só a primeira substituía `{marcador}`. As notas usam a
+segunda, então o texto trocava de idioma e deixava `{modelo}` cru na tela. Ficou
+invisível para quem tem o idioma do navegador igual ao padrão — que é o caso de
+quem testa. `comVars()` passou a servir as duas.

@@ -43,6 +43,26 @@ Gera `site/dist/index.html` + `assets/` + `downloads/` com as imagens copiadas,
 para conferir a página com os arquivos de verdade. **Não** é o que é publicado —
 e `site/dist/` é ignorado pelo git.
 
+## Observações por aparelho
+
+Alguns aparelhos precisam de um aviso antes do download. O R35S é o caso: sai de
+fábrica com **cinco painéis** diferentes e nenhum EDID para descobrir qual é —
+esta imagem referencia o `panel4`, e unidade com outro painel precisa de outra
+build. A mesma placa é usada no R36S, então a imagem roda em algumas unidades
+dele.
+
+O aviso aparece no card, **fora do `<details>`**, entre o sha256 e os botões: é
+aviso, não detalhe.
+
+| Onde | O quê |
+| --- | --- |
+| `scripts/lib/device-notes.mjs` | o **dado** (`panel4`, `["R36S","R33S"]`) |
+| `scripts/lib/i18n.mjs` | a **frase**, nos dez idiomas, com `{modelo}`/`{outros}`/`{lista}` |
+| `release.json` → `device.observations` | o que o site consome (lista, `[]` quando não há) |
+
+A frase é traduzida e o dado não: escrever a frase inteira no dado a deixaria em
+português no meio de uma página em árabe.
+
 ## Idiomas
 
 O mesmo `index.html` fala os dez idiomas mais falados do mundo: inglês, chinês,
