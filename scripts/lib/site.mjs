@@ -3,7 +3,7 @@
 // Por que gerar HTML em vez de buscar JSON no navegador: o site precisa abrir
 // direto do disco (`file://`), sem servidor e sem CORS. Com os dados embutidos,
 // `index.html` é o site inteiro.
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { humanSize, isDir, isFile, listDir, readJson, walk } from "./fs.mjs";
@@ -182,6 +182,16 @@ export function generateSite({
 
   mkdirSync(outDir, { recursive: true });
   mkdirSync(path.join(outDir, "assets"), { recursive: true });
+
+  // `downloads/` é RECRIADA, não preenchida. `copyFileSync` sobrescreve mas
+  // nunca apaga: um aparelho que sai do `dist` (ou é renomeado) deixaria a
+  // imagem antiga publicada no site para sempre — link morto que ainda baixa,
+  // e pior se a página antiga continuasse em cache. Só apaga quando este
+  // processo é o dono da cópia (`copyImages`), senão a geração de só HTML
+  // destruiria os downloads de uma rodada anterior.
+  const downloadsDir = path.join(outDir, "downloads");
+  if (copyImages) rmSync(downloadsDir, { recursive: true, force: true });
+
   // Copia a pasta `assets` inteira, não só o CSS: o site passou a ter logo
   // (`logo.jpg`), marca do cabeçalho (`logo-mark.png`) e favicon. Copiar só o
   // CSS deixa o site publicado com imagem quebrada — e o build fica verde.

@@ -460,8 +460,60 @@ test("generateSite produz html com o device e link da imagem", async () => {
   });
 });
 
-test("generateSite falha sem release.json", async () => {
+test("generateSite apaga download de aparelho que saiu do dist", async () => {
+  // `copyFileSync` nunca apaga: um aparelho que sai do `dist` (ou é renomeado)
+  // deixaria a imagem antiga publicada no site para sempre — link que ainda
+  // baixa, apontando para um build que não existe mais.
   await withTempDirAsync(async (dir) => {
+    const outDir = path.join(dir, "site");
+    const ghost = path.join(outDir, "downloads", "powkiddy-x35s", "velho.img");
+    write(ghost, "imagem de um aparelho que nao existe mais");
+
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    makeSystemOutput(systemDir);
+    const distDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir: distDir, version: "1.0.0" });
+
+    const result = generateSite({
+      distDir,
+      outDir,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(isFile(ghost), false, "download fantasma continuou no site");
+    assert.equal(isFile(path.join(outDir, "downloads", "qemu-aarch64", "giochi-qemu-aarch64-1.0.0.img")), true);
+  });
+});
+
+test("generateSite sem cópia de imagens não destrói os downloads", async () => {
+  // A geração de só HTML não é dona da pasta: apagá-la destruiria os downloads
+  // de uma rodada anterior.
+  await withTempDirAsync(async (dir) => {
+    const outDir = path.join(dir, "site");
+    const existente = path.join(outDir, "downloads", "qemu-aarch64", "imagem.img");
+    write(existente, "download de uma rodada anterior");
+
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    makeSystemOutput(systemDir);
+    const distDir = path.join(dir, "dist");
+    await runPackagePhase({ systemDir, outDir: distDir, version: "1.0.0" });
+
+    const result = generateSite({
+      distDir,
+      outDir,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      copyImages: false,
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(isFile(existente), true);
+  });
+});
+
+test("generateSite falha sem release.json", async () => {  await withTempDirAsync(async (dir) => {
     const result = generateSite({
       distDir: path.join(dir, "vazio"),
       outDir: path.join(dir, "site"),
