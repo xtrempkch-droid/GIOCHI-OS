@@ -325,14 +325,34 @@ export async function runPackagePhase({
     }
 
     const already = lerApps();
-    if (already.ok && already.apps.length > 0) {
+    // Um app presente na imagem NÃO prova que a imagem está completa: ela pode
+    // ter sido construída com um overlay antigo. Medido no QEMU — o rootfs
+    // trazia 2 apps de um build anterior e a injeção foi pulada, deixando os 4
+    // jogos do catálogo de fora, com o manifesto anunciando 2.
+    //
+    // O critério é o catálogo, não a contagem: pula só quando todo app de
+    // distribuição `image` já está lá. App extra na imagem não impede o pulo —
+    // ele é reportado pelo `reconcileEmbedded`, que publica o que existe de
+    // verdade em vez de esconder.
+    const naImagem = new Set(already.ok ? already.apps.map((app) => String(app.id)) : []);
+    const faltando = catalogEmbedded.filter((app) => !naImagem.has(String(app.id)));
+
+    if (already.ok && already.apps.length > 0 && faltando.length === 0) {
       warnings.push({
         code: "apps_ja_presentes",
-        message: `${imageName} já traz ${already.apps.length} app(s); a injeção não é necessária`,
+        message: `${imageName} já traz os ${already.apps.length} app(s) do catálogo; a injeção não é necessária`,
       });
       imageVerified = true;
       embedded = reconcileEmbedded(catalogEmbedded, already.apps);
     } else {
+      if (already.ok && already.apps.length > 0 && faltando.length > 0) {
+        warnings.push({
+          code: "apps_incompletos",
+          message:
+            `${imageName} traz ${already.apps.length} app(s) mas faltam ${faltando.length} do catálogo ` +
+            `(${faltando.map((app) => app.id).join(", ")}); injetando o catálogo inteiro`,
+        });
+      }
       const stagingBase = path.join(outDir, ".injeacao");
       rmSync(stagingBase, { recursive: true, force: true });
       const overlay = await runAppsPhase({ appsRoots: roots, outDir: stagingBase });

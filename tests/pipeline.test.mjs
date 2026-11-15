@@ -926,6 +926,92 @@ test("injectOverlay escreve arquivos com bit de execução", (t) => {
   });
 });
 
+test("injectOverlay sobrescreve arquivo que já existe na imagem", (t) => {
+  // `debugfs write` recusa sobrescrever do jeito pior: imprime o erro no stderr
+  // e SAI COM 0. Confiar no status dava injeção "bem-sucedida" com o conteúdo
+  // antigo no lugar — foi assim que o `index.json` de um rootfs com overlay
+  // velho continuou anunciando o catálogo anterior.
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const image = path.join(dir, "com-apps.ext4");
+    const rootdir = path.join(dir, "rootdir");
+    write(path.join(rootdir, "opt/giochi/apps/index.json"), '{"schemaVersion":1,"apps":[{"id":"velho"}]}');
+    write(path.join(rootdir, "opt/giochi/apps/velho/bin/tool"), "antigo\n");
+    const made = spawnSync("mkfs.ext4", ["-q", "-F", "-d", rootdir, image, "16384"]);
+    assert.equal(made.status, 0, String(made.stderr));
+
+    const overlayDir = path.join(dir, "overlay");
+    write(path.join(overlayDir, "opt/giochi/apps/index.json"), '{"schemaVersion":1,"apps":[{"id":"novo"}]}');
+    write(path.join(overlayDir, "opt/giochi/apps/novo/bin/tool"), "novo mesmo\n");
+
+    const result = injectOverlay({ imagePath: image, overlayDir });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    assert.match(String(readFromImage(image, "/opt/giochi/apps/index.json")), /novo/);
+  });
+});
+
+test("injectOverlay falha quando a escrita não cabe no ext4", (t) => {
+  // Sem checar tamanho, um `write` truncado por disco cheio passa por sucesso.
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const image = path.join(dir, "cheio.ext4");
+    const rootdir = path.join(dir, "rootdir");
+    write(path.join(rootdir, "etc/motd"), "oi\n");
+    const made = spawnSync("mkfs.ext4", ["-q", "-F", "-d", rootdir, image, "8192"]);
+    assert.equal(made.status, 0, String(made.stderr));
+
+    // 4 MiB para um ext4 de 8 MiB já com metadados: não cabe.
+    const overlayDir = path.join(dir, "overlay");
+    write(path.join(overlayDir, "opt/giochi/apps/grande.bin"), Buffer.alloc(4 * 1024 * 1024, 0x61));
+
+    const result = injectOverlay({ imagePath: image, overlayDir });
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.errors.some((error) => ["sem_espaco", "escrita_falhou", "escrita_truncada"].includes(error.code)),
+      JSON.stringify(result.errors),
+    );
+  });
+});
+
+test("injectOverlay deixa o ext4 montável, sem inode órfão", (t) => {
+  // `debugfs mkdir` num diretório que já existe ALOCA um inode e o deixa
+  // órfão. Como `ensureDirectory` repetia o `mkdir` de `/opt/giochi/apps` para
+  // cada arquivo do overlay, toda injeção publicava um ext4 que `e2fsck -fn`
+  // reprovava — com o build verde.
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("e2fsck")) {
+    return t.skip("mkfs.ext4/debugfs/e2fsck ausentes");
+  }
+  withTempDir((dir) => {
+    const image = path.join(dir, "sujo.ext4");
+    const rootdir = path.join(dir, "rootdir");
+    write(path.join(rootdir, "opt/giochi/apps/index.json"), '{"schemaVersion":1,"apps":[]}');
+    write(path.join(rootdir, "opt/giochi/apps/launcher/bin/tool"), "antigo\n");
+    const made = spawnSync("mkfs.ext4", ["-q", "-F", "-d", rootdir, image, "16384"]);
+    assert.equal(made.status, 0, String(made.stderr));
+
+    // Vários arquivos no MESMO diretório: é o que repetia o `mkdir`.
+    const overlayDir = path.join(dir, "overlay");
+    write(path.join(overlayDir, "opt/giochi/apps/index.json"), '{"schemaVersion":1,"apps":[{"id":"a"}]}');
+    for (const nome of ["um", "dois", "tres"]) {
+      write(path.join(overlayDir, `opt/giochi/apps/a/bin/${nome}`), "#!/bin/sh\necho a\n");
+    }
+
+    const result = injectOverlay({ imagePath: image, overlayDir });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.written, 4);
+
+    // `-fn` não conserta: só relata. Status 0 significa que não há nada a
+    // consertar, que é a garantia de que o aparelho vai montar.
+    const fsck = spawnSync("e2fsck", ["-fn", image], { encoding: "utf8" });
+    assert.equal(fsck.status, 0, `${fsck.stdout}\n${fsck.stderr}`);
+  });
+});
+
 test("injectOverlay recusa quando falta biblioteca que o app pede", (t) => {
   if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("readelf")) {
     return t.skip("mkfs.ext4/debugfs/readelf ausentes");
@@ -1025,8 +1111,75 @@ test("fase package injeta apps quando pedido e a imagem permite", (t) => {
   });
 });
 
-// ── leitura do ext4 dentro de imagem particionada ────────────
+test("fase package injeta quando a imagem traz um catálogo antigo", (t) => {
+  // Medido no QEMU: o rootfs tinha 2 apps de um build anterior e a injeção foi
+  // pulada porque "já tinha app". Os 4 jogos novos do catálogo nunca entraram e
+  // o manifesto anunciou 2. Ter app não é prova de estar completo — o critério
+  // é o catálogo.
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs") || !binaryAvailable("readelf")) {
+    return t.skip("mkfs.ext4/debugfs/readelf ausentes");
+  }
+  return withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "qemu-aarch64");
+    const kernel = Buffer.from("kernel de teste");
 
+    // O rootfs já chega com um app de um build antigo.
+    const rootdir = path.join(dir, "rootdir");
+    write(
+      path.join(rootdir, "opt/giochi/apps/index.json"),
+      JSON.stringify({ schemaVersion: 1, apps: [{ id: "antigo", version: "0.0.1" }] }),
+    );
+    write(path.join(rootdir, "opt/giochi/apps/antigo/bin/tool"), "#!/bin/sh\necho velho\n");
+
+    const rootfs = path.join(systemDir, "rootfs.ext4");
+    mkdirSync(systemDir, { recursive: true });
+    assert.equal(spawnSync("mkfs.ext4", ["-q", "-F", "-d", rootdir, rootfs, "32768"]).status, 0);
+    write(path.join(systemDir, "Image"), kernel);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({
+        id: "qemu-aarch64",
+        name: "QEMU",
+        arch: "arm64",
+        buildroot: "2024.02",
+        buildrootDefconfig: "qemu_aarch64_virt_defconfig",
+      }),
+    );
+    write(path.join(systemDir, "build-info.txt"), "buildroot=2024.02\n");
+    write(
+      path.join(systemDir, "SHA256SUMS"),
+      `${sha256(kernel)}  Image\n${sha256(readFileSync(rootfs))}  rootfs.ext4\n`,
+    );
+
+    const appsRoot = path.join(dir, "apps");
+    const novo = makeApp(appsRoot, { id: "jogo-novo" });
+    makeRegistry(appsRoot, [novo]);
+
+    const result = await runPackagePhase({
+      systemDir,
+      appsRoot,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+      injectApps: true,
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.ok(
+      result.warnings.some((w) => w.code === "apps_incompletos"),
+      JSON.stringify(result.warnings),
+    );
+
+    // O app do catálogo entrou de verdade no arquivo publicado…
+    const image = path.join(dir, "dist", result.release.system.image);
+    assert.match(String(readFromImage(image, "/opt/giochi/apps/jogo-novo/bin/tool")), /echo ok/);
+    // …e o `index.json` passou a anunciar o catálogo, não o overlay velho.
+    const index = String(readFromImage(image, "/opt/giochi/apps/index.json"));
+    assert.match(index, /jogo-novo/);
+    assert.doesNotMatch(index, /"antigo"/);
+  });
+});
+
+// ── leitura do ext4 dentro de imagem particionada ────────────
 /** Imagem de cartão mínima: tabela MBR + uma partição ext4 com conteúdo. */
 function makeCardImage(dir, rootContent) {
   const rootdir = path.join(dir, "rootdir");

@@ -32,7 +32,7 @@
 // ext4 no meio da escrita produz um arquivo truncado, e o app passa a falhar de
 // um jeito que não parece falta de espaço.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -71,6 +71,20 @@ export function existsInImage(imagePath, target) {
   const result = runDebugfs(imagePath, `stat ${target}`);
   // Caminho inexistente sai com status 0 e "File not found" no stderr.
   return result.ok && !/file not found|not found by/i.test(result.stderr);
+}
+
+/**
+ * Tamanho, em bytes, de um arquivo dentro do ext4. `null` se não deu para ler.
+ *
+ * O primeiro `Size:` do `stat` é o do inode; o `Size:` do `Fragment:` vem depois
+ * e é sempre 0 — por isso a busca é pela PRIMEIRA ocorrência, não por qualquer.
+ */
+export function sizeInImage(imagePath, target) {
+  const result = runDebugfs(imagePath, `stat ${target}`);
+  if (!result.ok) return null;
+  if (/file not found|not found by/i.test(result.stderr)) return null;
+  const match = /Size:\s*(\d+)/.exec(result.stdout);
+  return match ? Number(match[1]) : null;
 }
 
 /** Conteúdo de um arquivo dentro do ext4, ou null. */
@@ -147,7 +161,12 @@ function ensureDirectory(imagePath, targetDir) {
   let current = "";
   for (const part of parts) {
     current += `/${part}`;
-    // `mkdir` num diretório existente devolve erro; não é falha.
+    // `mkdir` num diretório existente NÃO é inofensivo: o debugfs aloca um
+    // inode, imprime "Ext2 directory already exists" e o inode fica órfão —
+    // medido com `e2fsck -fn`, que passou a acusar "Pasta de inode N não
+    // ligada". Uma injeção repetia `mkdir` de `/opt/giochi/apps` para cada
+    // arquivo do overlay e publicava um ext4 já sujo. Só cria o que falta.
+    if (existsInImage(imagePath, current)) continue;
     runDebugfs(imagePath, `mkdir ${current}`, { write: true });
   }
 }
@@ -362,9 +381,30 @@ export function injectOverlay({ imagePath, overlayDir }) {
     const target = `/${relative.split(path.sep).join("/")}`;
     ensureDirectory(imagePath, path.posix.dirname(target));
 
+    // `debugfs write` RECUSA sobrescrever, e recusa do jeito pior: imprime
+    // "write: Ext2 file already exists" no stderr e SAI COM 0. O `runDebugfs`
+    // só olhava o status, então a escrita era dada como feita e o arquivo
+    // antigo ficava — medido no `index.json`, que continuou anunciando o
+    // catálogo velho enquanto o manifesto dizia "apps injetados".
+    //
+    // Apagar antes elimina o caso. `rm` num caminho ausente é o normal aqui
+    // (imagem vinda do CI não tem a pasta de apps), e o erro dele é ignorado.
+    runDebugfs(imagePath, `rm ${target}`, { write: true });
+
     const put = runDebugfs(imagePath, `write ${source} ${target}`, { write: true });
-    if (!put.ok) {
+    if (!put.ok || /file already exists|no space|read-only|permission denied/i.test(put.stderr)) {
       errors.push({ code: "escrita_falhou", message: `${target}: ${put.stderr.trim() || put.error}` });
+      continue;
+    }
+
+    // Prova que o que entrou é o que saiu, em vez de confiar no status do
+    // `debugfs`. Disco cheio no meio do `write` trunca sem erro.
+    const esperado = statSync(source).size;
+    if (sizeInImage(imagePath, target) !== esperado) {
+      errors.push({
+        code: "escrita_truncada",
+        message: `${target}: entrou com tamanho diferente de ${esperado} bytes`,
+      });
       continue;
     }
 
@@ -376,7 +416,28 @@ export function injectOverlay({ imagePath, overlayDir }) {
     written += 1;
   }
 
-  return { ok: errors.length === 0, written, errors, missing: [] };
+  if (errors.length > 0) return { ok: false, written, errors, missing: [] };
+
+  // O `debugfs` é um editor de ext4 fora do kernel: uma sequência de escritas
+  // pode deixar bitmap ou contador de inode pendente. O caminho do cartão já
+  // roda `e2fsck -fy` de propósito (prova que a imagem alterada monta); o
+  // caminho cru não rodava, e publicava um ext4 que `e2fsck -fn` reprova.
+  // Estrutura de arquivo que o kernel não monta é release quebrada, mesmo com
+  // todos os bytes no lugar.
+  if (written > 0 && fsckAvailable()) {
+    const fs = checkFilesystem(imagePath);
+    if (!fs.ok) {
+      return {
+        ok: false,
+        written,
+        missing: [],
+        errors: [{ code: "rootfs_corrompido", message: `${imagePath}: ${fs.reason}` }],
+      };
+    }
+    return { ok: true, written, missing: [], corrected: Boolean(fs.corrected) };
+  }
+
+  return { ok: true, written, errors, missing: [], corrected: false };
 }
 
 /** Confere que o índice ficou legível dentro da imagem. */
@@ -541,7 +602,7 @@ export function injectIntoCardImage({ imagePath, overlayDir }) {
       };
     }
 
-    return { ok: true, written: injetado.written, missing: [], errors: [], corrected: fs.corrected };
+    return { ok: true, written: injetado.written, missing: [], errors: [], corrected: fs.corrected || injetado.corrected };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
