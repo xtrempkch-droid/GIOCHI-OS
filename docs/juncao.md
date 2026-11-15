@@ -190,7 +190,7 @@ como cartão.
 - **Não assina** a imagem — a chave é do Giochi System.
 - **Não hospeda** a loja — ela roda no PC do usuário.
 
-## Injeção no ext4 (`--inject-apps`)
+## Injeção na imagem (`--inject-apps`)
 
 ```bash
 node scripts/assemble.mjs package ... --inject-apps
@@ -201,15 +201,32 @@ Ainda assim existe um caso em que isso não é possível — o CI do Giochi Syst
 constrói a imagem sem ver o catálogo do Giochi app, então ela chega pronta e sem
 os apps.
 
-`--inject-apps` fecha essa lacuna escrevendo o overlay dentro do `rootfs.ext4`
-com `debugfs -w`, **sem montar e sem root**. Ele é estreito de propósito:
+`--inject-apps` fecha essa lacuna escrevendo o overlay **sem montar e sem
+root**. Dois formatos, porque o artefato do sistema tem dois:
+
+| Entrada | Como |
+| --- | --- |
+| `rootfs.ext4` (alvo virtual) | `debugfs -w` escreve direto no ext4 |
+| `.img` de cartão (MBR/GPT) | extrai a partição com `dd`, altera, confere com `e2fsck -fy`, devolve ao offset com `conv=notrunc,fsync` |
+
+No cartão, a tabela de partição e as demais partições (a FAT de boot, no X55)
+**não são tocadas** — só a partição do rootfs é extraída e devolvida.
+
+O que a injeção sempre recusa:
 
 | Condição | Comportamento |
 | --- | --- |
-| imagem de cartão (MBR/partição) | recusa: `nao_ext4` |
 | falta biblioteca que um binário pede | recusa: `biblioteca_ausente` |
-| `debugfs` ausente | recusa: `debugfs_ausente` |
+| overlay não cabe no espaço livre | recusa: `sem_espaco` (com 10% de folga) |
+| `e2fsck` ausente (só cartão) | recusa: `e2fsck_ausente` |
+| rootfs não passa no `e2fsck` depois | recusa: `rootfs_corrompido` |
+| imagem comprimida na origem | recusa: `cartao_comprimido` |
 | overlay já presente | avisa `apps_ja_presentes`, não reescreve |
+
+A checagem de espaço não é zelo: encher um ext4 no meio da escrita trunca
+arquivo **sem erro**, e o app passa a falhar de um jeito que não parece falta de
+espaço. A de `e2fsck` é a mesma ideia uma camada acima — um rootfs que não monta
+dá um cartão que liga e não passa do bootloader.
 
 A checagem de biblioteca é o ponto. Ela lê as `DT_NEEDED` de cada binário do
 overlay (`readelf` com `LC_ALL=C`) e procura cada uma dentro da imagem. Sem
@@ -246,3 +263,27 @@ apps e a imagem tinha zero; agora ela publica `apps.embedded: []`, avisa
 Quando nem o `debugfs` nem o `sfdisk` existem, o catálogo é a única informação
 disponível: a release o usa, marca `apps.imageVerified: false` e avisa
 `apps_nao_verificados`.
+
+## O CI precisa montar a imagem de cartão
+
+O build do sistema entrega `Image`, `rootfs.ext4`, `idbloader.img` e
+`u-boot*.bin` **soltos**. Um cartão gravado só com eles não inicializa: o
+BootROM da Rockchip lê o firmware em setores fixos (64 e 16384) e o kernel vive
+numa partição FAT que ninguém criou.
+
+Quem monta o layout é `scripts/make-sd-image.sh` — e ele precisa de loop device.
+Por isso o workflow do GIOCHI-SYSTEM ganhou um passo com `sudo` que roda **só
+para aparelho que declara firmware de boot em `artifacts`**:
+
+```yaml
+if node -e '... artifacts.some(a => /idbloader|u-boot/i.test(a)) ...'; then
+  sudo bash scripts/make-sd-image.sh <device>
+  sudo chown -R "$(id -u):$(id -g)" out/<device>
+fi
+```
+
+O `chown` não é detalhe: o script roda como root e o upload roda como o usuário
+do runner, que não lê arquivo de outro dono.
+
+O `qemu-aarch64` cai no `else` — não tem U-Boot nem layout de partição, e o
+`rootfs.ext4` dele já é o disco.

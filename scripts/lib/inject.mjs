@@ -1,35 +1,42 @@
-// Escrita de um overlay dentro de uma imagem ext4, sem montar e sem root.
+// Escrita de um overlay dentro de um rootfs ext4, sem montar e sem root.
 //
 // ## Por que isto existe
 //
 // A decisão registrada é: os apps entram no rootfs **antes** do Buildroot gerar
-// a imagem. Isso vale para o cartão — a raiz é assinada, e remontar a imagem
-// depois desfaria a assinatura.
+// a imagem. Esse é o caminho normal, e é o que roda quando o Giochi os monta o
+// overlay e o build o consome.
 //
-// O alvo virtual é outro caso, e a diferença é objetiva:
+// O CI não tem esse caminho: o GIOCHI-SYSTEM constrói a imagem sem ver o
+// catálogo do Giochi app, e o artefato chega pronto. Aqui é a ponte.
 //
-// - não há tabela de partição: o `rootfs.ext4` **é** o disco;
-// - não há assinatura: o `qemu-aarch64` não gera imagem de cartão.
+// ## Dois formatos de entrada
 //
-// Ainda assim isto é uma exceção, não o caminho normal — e é por isso que
-// `injectApps` recusa:
+//   ext4 cru      `rootfs.ext4` do alvo virtual. É o próprio disco, sem tabela
+//                 de partição: `debugfs -w` escreve direto nele.
+//   imagem de cartão  `.img` com MBR/GPT. O ext4 está atrás da tabela e o
+//                 `debugfs` não aceita deslocamento — então a partição é
+//                 extraída, alterada, conferida com `e2fsck` e devolvida ao
+//                 offset de origem.
 //
-// - imagem com tabela de partição (`.img`/`.iso`/`.sdcard` de cartão);
-// - overlay cujo binário precise de biblioteca que a imagem não tem.
+// ## O que a injeção SEMPRE recusa
 //
-// A segunda recusa é a que importa. Medido em 13/11/2026: o launcher entrava na
-// imagem e morria com
+// Overlay cujo binário precise de uma biblioteca que a imagem não tem. Medido
+// em 13/11/2026: o launcher entrava na imagem e morria com
 //
 //   error while loading shared libraries: libSDL2-2.0.so.0
 //
 // O manifesto anunciava 6 apps e o console mostrava laço de queda. Descobrir
 // isso no boot é tarde; descobrir na injeção custa uma linha.
+//
+// Também recusa quando o espaço livre do rootfs não cobre o overlay — encher um
+// ext4 no meio da escrita produz um arquivo truncado, e o app passa a falhar de
+// um jeito que não parece falta de espaço.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isFile, walk } from "./fs.mjs";
+import { isFile, sizeOf, walk } from "./fs.mjs";
 import { readRootfsApps } from "./rootfs.mjs";
 
 /** Caminho padrão do índice, o mesmo que o launcher lê. */
@@ -145,6 +152,122 @@ function ensureDirectory(imagePath, targetDir) {
   }
 }
 
+/**
+ * Espaço livre do ext4, em bytes. `null` quando não deu para ler.
+ *
+ * O `debugfs` imprime `Block size:` e `Free blocks:` no `stats`. Ler os dois é a
+ * única forma de saber, sem montar, se o overlay cabe — e encher um ext4 no meio
+ * da escrita produz arquivo truncado, não erro.
+ */
+export function freeSpaceBytes(ext4Path) {
+  const stats = runDebugfs(ext4Path, "stats").stdout;
+  const bloco = Number(/Block size:\s+(\d+)/.exec(stats)?.[1]);
+  const livres = Number(/Free blocks:\s+(\d+)/.exec(stats)?.[1]);
+  if (!Number.isFinite(bloco) || !Number.isFinite(livres)) return null;
+  return bloco * livres;
+}
+
+/** Tamanho total dos arquivos regulares de um overlay. */
+function overlayBytes(overlayDir) {
+  let total = 0;
+  for (const relative of walk(overlayDir)) {
+    const full = path.join(overlayDir, relative);
+    if (isFile(full)) total += sizeOf(full);
+  }
+  return total;
+}
+
+/** A maior partição Linux da tabela — onde o rootfs mora. */
+function linuxPartition(table) {
+  if (!table) return null;
+  // Tipos Linux: 83 (MBR/ext4) e o GUID de "Linux filesystem" no GPT.
+  const isLinux = (part) =>
+    part.type === "83" || /^0fc63daf-8483-4772-8e79-3d69d8477de4$/i.test(part.type);
+  const linux = table.partitions.filter(isLinux);
+  const candidatos = linux.length > 0 ? linux : table.partitions;
+  if (candidatos.length === 0) return null;
+  return candidatos.reduce((a, b) => (b.size > a.size ? b : a));
+}
+
+/** Extrai uma partição para um arquivo. */
+function extractPartition(imagePath, table, part, targetPath) {
+  const copy = spawnSync(
+    "dd",
+    [
+      `if=${imagePath}`,
+      `of=${targetPath}`,
+      `bs=${table.sectorSize}`,
+      `skip=${part.start}`,
+      `count=${part.size}`,
+      "status=none",
+    ],
+    { encoding: "utf8" },
+  );
+  if (copy.error || copy.status !== 0) {
+    return {
+      ok: false,
+      reason: `extração da partição falhou: ${(copy.stderr || copy.error || "").toString().trim()}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Devolve a partição alterada ao lugar dela.
+ *
+ * `conv=notrunc` é obrigatório: sem ele o `dd` TRUNCA a imagem no ponto em que a
+ * escrita termina, e o que vem depois da partição (a segunda partição, a tabela
+ * de backup do GPT) some. O `conv=fsync` garante que a escrita chegou ao disco
+ * antes de qualquer verificação.
+ */
+function writeBackPartition(imagePath, table, part, sourcePath) {
+  const copy = spawnSync(
+    "dd",
+    [
+      `if=${sourcePath}`,
+      `of=${imagePath}`,
+      `bs=${table.sectorSize}`,
+      `seek=${part.start}`,
+      "count=" + String(part.size),
+      "conv=notrunc,fsync",
+      "status=none",
+    ],
+    { encoding: "utf8" },
+  );
+  if (copy.error || copy.status !== 0) {
+    return {
+      ok: false,
+      reason: `devolução da partição falhou: ${(copy.stderr || copy.error || "").toString().trim()}`,
+    };
+  }
+  return { ok: true };
+}
+
+/** `e2fsck` existe nesta máquina? */
+function fsckAvailable() {
+  const result = spawnSync("e2fsck", ["-V"], { stdio: "ignore" });
+  return !result.error && result.status === 0;
+}
+
+/**
+ * Confere (e conserta, se preciso) o ext4 alterado.
+ *
+ * `-fy` porque o sistema de arquivos foi escrito por fora do kernel: o contador
+ * de montagens limpo é o que faz um `fsck` de boot não reclamar. Saída 0 é "nada
+ * a fazer", 1 é "erros encontrados e corrigidos" — os dois servem. Acima disso é
+ * corrupção, e publicar assim daria um cartão que não monta.
+ */
+function checkFilesystem(ext4Path) {
+  const result = spawnSync("e2fsck", ["-fy", ext4Path], { encoding: "utf8" });
+  const status = result.status ?? 255;
+  if (result.error) return { ok: false, reason: result.error.message };
+  if (status === 0 || status === 1) return { ok: true, corrected: status === 1 };
+  return {
+    ok: false,
+    reason: `e2fsck saiu com ${status}: ${String(result.stdout || "").trim().split("\n").pop()}`,
+  };
+}
+
 function isExecutable(hostPath) {
   const result = spawnSync("file", ["-b", hostPath], { encoding: "utf8" });
   const text = String(result.stdout || "");
@@ -183,8 +306,8 @@ export function injectOverlay({ imagePath, overlayDir }) {
         {
           code: "nao_ext4",
           message:
-            `${imagePath} não abre como ext4 cru — imagem de cartão tem tabela de ` +
-            "partição; injeção só vale para o disco virtual",
+            `${imagePath} não abre como ext4 cru. Se for imagem de cartão, ela tem ` +
+            "tabela de partição e precisa do caminho por partição (injectIntoCardImage)",
         },
       ],
       missing: [],
@@ -203,6 +326,29 @@ export function injectOverlay({ imagePath, overlayDir }) {
           message:
             `a imagem não tem ${missing.join(", ")} — os binários do overlay não abririam. ` +
             "Ligue o pacote no fragmento do device e reconstrua, em vez de publicar app que não roda",
+        },
+      ],
+    };
+  }
+
+  // Espaço: encher o ext4 no meio da escrita trunca arquivo sem erro, e o app
+  // passa a falhar de um jeito que não parece falta de espaço. 10% de folga
+  // porque inode e bitmap também ocupam, e o overlay não é a última coisa que
+  // vai entrar na imagem.
+  const livre = freeSpaceBytes(imagePath);
+  const necessario = overlayBytes(overlayDir);
+  if (livre !== null && necessario > 0 && necessario * 1.1 > livre) {
+    return {
+      ok: false,
+      written: 0,
+      missing: [],
+      errors: [
+        {
+          code: "sem_espaco",
+          message:
+            `o rootfs tem ${Math.round(livre / 1024)} KiB livres e o overlay pede ` +
+            `${Math.round(necessario / 1024)} KiB (com 10% de folga). ` +
+            "Aumente BR2_TARGET_ROOTFS_EXT2_SIZE no fragmento do device",
         },
       ],
     };
@@ -283,12 +429,7 @@ export function readAppsFromCardImage(imagePath, { tempDir } = {}) {
   const table = listPartitions(imagePath);
   if (!table) return { ok: false, inspected: false, reason: "tabela de partição ilegível" };
 
-  // Tipos Linux: 83 (MBR/ext4) e o GUID de "Linux filesystem" no GPT.
-  const isLinux = (part) =>
-    part.type === "83" || /^0fc63daf-8483-4772-8e79-3d69d8477de4$/i.test(part.type);
-  const linux = table.partitions.filter(isLinux);
-  const candidates = linux.length > 0 ? linux : table.partitions;
-  const target = candidates.length > 0 ? candidates.reduce((a, b) => (b.size > a.size ? b : a)) : null;
+  const target = linuxPartition(table);
   if (!target) return { ok: false, inspected: false, reason: "nenhuma partição na tabela" };
 
   const created = !tempDir;
@@ -297,31 +438,113 @@ export function readAppsFromCardImage(imagePath, { tempDir } = {}) {
 
   // `dd` em vez de `fs.readFileSync`: 1 GiB de rootfs em buffer de JS é memória
   // gasta sem motivo, e o `dd` copia por faixa sem montar nada.
-  const copy = spawnSync(
-    "dd",
-    [
-      `if=${imagePath}`,
-      `of=${partitionFile}`,
-      `bs=${table.sectorSize}`,
-      `skip=${target.start}`,
-      `count=${target.size}`,
-      "status=none",
-    ],
-    { encoding: "utf8" },
-  );
-
-  if (copy.error || copy.status !== 0) {
+  const extraida = extractPartition(imagePath, table, target, partitionFile);
+  if (!extraida.ok) {
     if (created) rmSync(dir, { recursive: true, force: true });
-    return {
-      ok: false,
-      inspected: false,
-      reason: `extração da partição falhou: ${(copy.stderr || copy.error || "").toString().trim()}`,
-    };
+    return { ok: false, inspected: false, reason: extraida.reason };
   }
 
   const read = readRootfsApps(partitionFile);
   if (created) rmSync(dir, { recursive: true, force: true });
   return read;
+}
+
+/**
+ * Injeta o overlay numa imagem **com tabela de partição** (cartão SD).
+ *
+ * Extrai a partição do rootfs, escreve nela, confere com `e2fsck` e devolve ao
+ * offset de origem. A tabela de partição e as demais partições não são tocadas.
+ *
+ * Devolve `{ ok, written, errors, missing, corrected }`. Sempre limpa o
+ * temporário, inclusive nos caminhos de erro.
+ */
+export function injectIntoCardImage({ imagePath, overlayDir }) {
+  const table = listPartitions(imagePath);
+  if (!table) {
+    return {
+      ok: false,
+      written: 0,
+      missing: [],
+      errors: [
+        {
+          code: "tabela_ilegivel",
+          message: `${imagePath}: não consegui ler a tabela de partição (sfdisk ausente?)`,
+        },
+      ],
+    };
+  }
+
+  const target = linuxPartition(table);
+  if (!target) {
+    return {
+      ok: false,
+      written: 0,
+      missing: [],
+      errors: [{ code: "sem_particao", message: `${imagePath}: nenhuma partição na tabela` }],
+    };
+  }
+
+  if (!fsckAvailable()) {
+    return {
+      ok: false,
+      written: 0,
+      missing: [],
+      errors: [
+        {
+          code: "e2fsck_ausente",
+          message:
+            "e2fsck não disponível — sem ele não há como provar que o rootfs alterado " +
+            "continua montável, e a injeção não é publicada",
+        },
+      ],
+    };
+  }
+
+  const dir = mkdtempSync(path.join(os.tmpdir(), "giochi-inj-"));
+  const partitionFile = path.join(dir, "particao.img");
+  try {
+    const extraida = extractPartition(imagePath, table, target, partitionFile);
+    if (!extraida.ok) {
+      return {
+        ok: false,
+        written: 0,
+        missing: [],
+        errors: [{ code: "extracao_falhou", message: extraida.reason }],
+      };
+    }
+
+    const injetado = injectOverlay({ imagePath: partitionFile, overlayDir });
+    if (!injetado.ok) return { ...injetado, corrected: false };
+
+    const fs = checkFilesystem(partitionFile);
+    if (!fs.ok) {
+      return {
+        ok: false,
+        written: injetado.written,
+        missing: [],
+        errors: [
+          {
+            code: "rootfs_corrompido",
+            message: `o rootfs não passou no e2fsck depois da escrita (${fs.reason}); imagem descartada`,
+          },
+        ],
+      };
+    }
+
+    const devolvida = writeBackPartition(imagePath, table, target, partitionFile);
+    if (!devolvida.ok) {
+      return {
+        ok: false,
+        written: injetado.written,
+        missing: [],
+        errors: [{ code: "escrita_falhou", message: devolvida.reason }],
+      };
+    }
+
+    return { ok: true, written: injetado.written, missing: [], errors: [], corrected: fs.corrected };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 export { INDEX_PATH };

@@ -80,6 +80,11 @@ Aceita dois tipos de saída do build:
 | `.img` / `.iso` / `.sdcard` | a imagem do cartão | cartão SD (handheld) |
 | `Image` (kernel) + `rootfs.ext4` | disco + kernel | máquina virtual (QEMU) |
 
+`--inject-apps` cobre o caso em que a imagem chega pronta do CI, sem passar pela
+fase `apps`: escreve o overlay no ext4 sem montar. No cartão, a partição do
+rootfs é extraída, alterada, conferida com `e2fsck` e devolvida ao lugar — a
+tabela de partição não é tocada.
+
 O alvo virtual é o caso do `qemu-aarch64`: o Buildroot não roda `genimage` nele.
 O `rootfs.ext4` vira o disco (`-drive`) e o kernel vai como download separado —
 sem ele o disco não inicia. O `README.txt` e o site trazem o comando pronto.
@@ -121,7 +126,7 @@ Detalhes em [docs/site.md](docs/site.md).
 ## Comandos
 
 ```bash
-node tests/run-all.mjs                              # 38 testes
+node tests/run-all.mjs                              # 42 testes
 node scripts/assemble.mjs apps --apps <app/> --out <staging>
 node scripts/assemble.mjs package --system <out/device> --apps <app/> --out dist \
   --version 0.1.0 --compress xz
@@ -155,7 +160,7 @@ Giochi os/
 
 ## Estado
 
-O que está **verificado**: 38 testes passando — junção, verificação de checksum,
+O que está **verificado**: 42 testes passando — junção, verificação de checksum,
 regra de licença, geração do site com links corretos, publicação de alvo virtual
 (disco + kernel), compressão e leitura do `index.json` de dentro do `rootfs.ext4`.
 

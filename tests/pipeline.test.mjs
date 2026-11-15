@@ -16,7 +16,13 @@ import zlib from "node:zlib";
 import { loadApps, pngSize } from "../scripts/lib/apps.mjs";
 import { isFile } from "../scripts/lib/fs.mjs";
 import { runAppsPhase, runPackagePhase } from "../scripts/lib/pipeline.mjs";
-import { injectOverlay, readAppsFromCardImage, readFromImage } from "../scripts/lib/inject.mjs";
+import {
+  injectIntoCardImage,
+  injectOverlay,
+  listPartitions,
+  readAppsFromCardImage,
+  readFromImage,
+} from "../scripts/lib/inject.mjs";
 import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
 import { inspectSystemBuild, parseChecksums } from "../scripts/lib/system.mjs";
@@ -974,5 +980,141 @@ test("fase package não anuncia app do catálogo em cartão sem overlay", (t) =>
     assert.equal(result.release.apps.embedded.length, 0);
     assert.equal(result.release.apps.imageVerified, true);
     assert.ok(result.warnings.some((warning) => warning.code === "overlay_ausente"));
+  });
+});
+
+// ── injeção em imagem de cartão ──────────────────────────────
+
+/** `true` se o binário existe nesta máquina (qualquer flag de versão serve). */
+function temFerramenta(nome) {
+  for (const flag of ["--version", "-V"]) {
+    const r = spawnSync(nome, [flag], { stdio: "ignore" });
+    if (!r.error && r.status === 0) return true;
+  }
+  return !spawnSync(nome, [], { stdio: "ignore" }).error;
+}
+
+const CARTAO_OK = () =>
+  ["mkfs.ext4", "debugfs", "sfdisk", "dd", "e2fsck"].every(temFerramenta);
+
+test("injectIntoCardImage altera a partição sem tocar na tabela", (t) => {
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/e2fsck ausentes");
+  withTempDir((dir) => {
+    const index = { schemaVersion: 1, apps: [{ id: "launcher", version: "0.1.0" }] };
+    const image = makeCardImage(dir, { "etc/motd": "sem overlay\n" });
+    const antes = readFileSync(image);
+
+    const overlayDir = path.join(dir, "overlay");
+    write(path.join(overlayDir, "opt/giochi/apps/index.json"), JSON.stringify(index));
+    write(path.join(overlayDir, "opt/giochi/apps/x/bin/tool"), "#!/bin/sh\necho oi\n");
+
+    const resultado = injectIntoCardImage({ imagePath: image, overlayDir });
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+
+    // A tabela de partição continua idêntica, byte a byte no primeiro setor.
+    const depois = readFileSync(image);
+    assert.equal(depois.length, antes.length, "a imagem não pode mudar de tamanho");
+    assert.deepEqual(
+      [...depois.subarray(0, 512)],
+      [...antes.subarray(0, 512)],
+      "o setor do MBR não pode ser tocado",
+    );
+    assert.deepEqual(listPartitions(image).partitions, [
+      { start: 2048, size: 16384, type: "83" },
+    ]);
+
+    // E o índice está legível pela porta de quem usa a imagem.
+    const read = readAppsFromCardImage(image);
+    assert.equal(read.ok, true, read.reason);
+    assert.equal(read.apps.length, 1);
+  });
+});
+
+test("injectIntoCardImage recusa overlay maior que o espaço livre", (t) => {
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/e2fsck ausentes");
+  withTempDir((dir) => {
+    const image = makeCardImage(dir, { "etc/motd": "oi\n" });
+
+    // 8 MiB de partição; o overlay pede 12 MiB.
+    const overlayDir = path.join(dir, "overlay");
+    mkdirSync(overlayDir, { recursive: true });
+    writeFileSync(path.join(overlayDir, "grande.bin"), Buffer.alloc(12 * 1024 * 1024));
+
+    const resultado = injectIntoCardImage({ imagePath: image, overlayDir });
+    assert.equal(resultado.ok, false);
+    assert.ok(
+      resultado.errors.some((e) => e.code === "sem_espaco"),
+      `esperava sem_espaco, veio: ${JSON.stringify(resultado.errors)}`,
+    );
+  });
+});
+
+test("fase package injeta apps em cartão quando pedido", (t) => {
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/e2fsck ausentes");
+  return withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "r35s");
+    const image = makeCardImage(systemDir, { "etc/motd": "sem overlay\n" });
+    const bytes = readFileSync(image);
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "r35s", name: "R35S", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(path.join(systemDir, "build-info.txt"), "buildroot=2024.02\n");
+    write(path.join(systemDir, "SHA256SUMS"), `${sha256(bytes)}  cartao.img\n`);
+
+    const appsRoot = path.join(dir, "apps");
+    const app = makeApp(appsRoot, { id: "launcher" });
+    // Script em vez de ELF: a checagem de biblioteca não tem o que exigir, e o
+    // caminho de cartão é o que este teste cobre.
+    write(path.join(app.dir, "bin", "tool"), "#!/bin/sh\necho ok\n");
+    makeRegistry(appsRoot, [app]);
+
+    const result = await runPackagePhase({
+      systemDir,
+      appsRoot,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+      injectApps: true,
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.release.device.kind, "card");
+    assert.equal(result.release.apps.embedded.length, 1);
+    assert.equal(result.release.apps.imageVerified, true);
+    assert.ok(result.warnings.some((w) => w.code === "apps_injetados"));
+
+    // O arquivo publicado é o que tem os apps — não a cópia feita antes.
+    const publicado = path.join(dir, "dist", result.release.system.image);
+    const lido = readAppsFromCardImage(publicado);
+    assert.equal(lido.ok, true, lido.reason);
+    assert.equal(lido.apps[0].id, "launcher");
+  });
+});
+
+test("fase package recusa injeção em cartão comprimido", async () => {
+  await withTempDirAsync(async (dir) => {
+    const systemDir = path.join(dir, "out", "dev");
+    const cru = Buffer.from("imagem crua");
+    write(path.join(systemDir, "sdcard.img.xz"), Buffer.from("xz"));
+    write(
+      path.join(systemDir, "device.json"),
+      JSON.stringify({ id: "dev", name: "Dev", arch: "arm64", buildroot: "2024.02" }),
+    );
+    write(path.join(systemDir, "build-info.txt"), "buildroot=2024.02\n");
+    write(path.join(systemDir, "SHA256SUMS"), `${sha256(Buffer.from("xz"))}  sdcard.img.xz\n`);
+    void cru;
+
+    const appsRoot = path.join(dir, "apps");
+    makeRegistry(appsRoot, [makeApp(appsRoot, { id: "launcher" })]);
+
+    const result = await runPackagePhase({
+      systemDir,
+      appsRoot,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+      injectApps: true,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((e) => e.code === "cartao_comprimido"));
   });
 });

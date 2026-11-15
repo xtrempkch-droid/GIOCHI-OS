@@ -8,7 +8,11 @@ import path from "node:path";
 import { loadApps } from "./apps.mjs";
 import { compressFile } from "./compress.mjs";
 import { humanSize, isFile, sha256File, sizeOf, walk } from "./fs.mjs";
-import { injectOverlay, readAppsFromCardImage, verifyIndex } from "./inject.mjs";
+import {
+  injectIntoCardImage,
+  injectOverlay,
+  readAppsFromCardImage,
+} from "./inject.mjs";
 import { stripCompression } from "./names.mjs";
 import { decompressCommand, qemuBootConfig, renderQemuCommand } from "./qemu.mjs";
 import { readRootfsApps } from "./rootfs.mjs";
@@ -39,6 +43,15 @@ export async function runAppsPhase({ appsRoot, outDir }) {
 
   const overlayDir = path.join(outDir, "rootfs-overlay");
   const appsDir = path.join(overlayDir, "opt", "giochi", "apps");
+
+  // A saída é RECRIADA a cada execução. `copyTree` escreve e sobrescreve, mas
+  // nunca APAGA: um app removido do catálogo continuava no overlay e ia para a
+  // imagem, com o `index.json` (que é regerado) sem citá-lo. Medido em
+  // 14/11/2026: os jogos saíram do catálogo do Giochi app e as pastas deles
+  // seguiram no overlay — 4 apps fantasma num `index.json` de 2 entradas.
+  rmSync(appsDir, { recursive: true, force: true });
+  mkdirSync(appsDir, { recursive: true });
+
   const index = [];
 
   for (const app of apps.embedded) {
@@ -277,12 +290,37 @@ export async function runPackagePhase({
 
   // Injeção opcional do overlay de apps.
   //
-  // Só faz sentido no alvo virtual: ext4 cru, sem tabela de partição e sem
-  // assinatura. No cartão, a fase `apps` roda ANTES do build, por decisão —
-  // ver docs/juncao.md. Aqui é a ponte para quando a imagem chega pronta de
-  // outro lugar (o CI do Giochi System não tem o catálogo de apps).
-  if (injectApps && !card && appsRoot) {
-    const already = readRootfsApps(imageTarget);
+  // O caminho normal continua sendo a fase `apps` ANTES do build (ver
+  // docs/juncao.md): a imagem sai do Buildroot já com os apps. Isto é a ponte
+  // para quando a imagem chega pronta de outro lugar — o CI do Giochi System
+  // constrói sem ver o catálogo.
+  //
+  // Dois formatos, porque o artefato do sistema tem dois:
+  //
+  //   ext4 cru (alvo virtual)      `debugfs -w` escreve direto
+  //   imagem de cartão (partição)  extrai a partição, altera, confere com
+  //                                `e2fsck` e devolve ao offset
+  if (injectApps && appsRoot) {
+    const lerApps = () => (card ? readAppsFromCardImage(imageTarget) : readRootfsApps(imageTarget));
+    const escrever = (overlayDir) =>
+      card
+        ? injectIntoCardImage({ imagePath: imageTarget, overlayDir })
+        : injectOverlay({ imagePath: imageTarget, overlayDir });
+
+    if (card && card.compressed) {
+      // A injeção precisa do setor cru. Descomprimir 2 GiB para alterar e
+      // recomprimir seria trabalho dobrado — e o artefato do sistema já chega
+      // descomprimido no caminho normal.
+      errors.push({
+        code: "cartao_comprimido",
+        message:
+          `${card.name} está comprimida; a injeção precisa do .img cru. ` +
+          "Use a fase `apps` antes do build, ou aponte --system para a pasta com o .img",
+      });
+      return { ok: false, errors, warnings, release: null };
+    }
+
+    const already = lerApps();
     if (already.ok && already.apps.length > 0) {
       warnings.push({
         code: "apps_ja_presentes",
@@ -295,11 +333,12 @@ export async function runPackagePhase({
       rmSync(stagingBase, { recursive: true, force: true });
       const overlay = await runAppsPhase({ appsRoot, outDir: stagingBase });
       if (!overlay.ok) {
+        rmSync(stagingBase, { recursive: true, force: true });
         errors.push(...overlay.errors);
         return { ok: false, errors, warnings, release: null };
       }
 
-      const injected = injectOverlay({ imagePath: imageTarget, overlayDir: overlay.overlayDir });
+      const injected = escrever(overlay.overlayDir);
       rmSync(stagingBase, { recursive: true, force: true });
 
       if (!injected.ok) {
@@ -307,7 +346,9 @@ export async function runPackagePhase({
         return { ok: false, errors, warnings, release: null };
       }
 
-      const check = verifyIndex(imageTarget);
+      // Relê pela porta de quem vai USAR a imagem: no cartão isso é a partição
+      // extraída, não o arquivo de 2 GiB.
+      const check = lerApps();
       if (!check.ok) {
         errors.push({ code: "injecao_nao_verificou", message: check.reason });
         return { ok: false, errors, warnings, release: null };
@@ -319,7 +360,8 @@ export async function runPackagePhase({
         code: "apps_injetados",
         message:
           `${injected.written} arquivo(s) de ${overlay.embedded.length} app(s) escritos em ${imageName} ` +
-          "depois do build — a imagem não passou pelo post-build com eles",
+          `depois do build — a imagem não passou pelo post-build com eles` +
+          (card ? " (rootfs extraído, alterado e conferido com e2fsck)" : ""),
       });
     }
   }

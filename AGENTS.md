@@ -39,13 +39,13 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
   `compress`, `rootfs`, `qemu` e `names`.
 - `site/template.html` + `site/assets/style.css`, com card próprio para alvo
   virtual (bloco "Como iniciar no QEMU" e download do kernel).
-- 38 testes em `tests/pipeline.test.mjs`.
+- 42 testes em `tests/pipeline.test.mjs`.
 - Workflows: `validate.yml` (testes) e `release.yml` (release + Pages).
 - Documentação em `docs/` (3 páginas).
 
 ### Validado nesta sessão
 
-- `node tests/run-all.mjs` passou: **38/38**.
+- `node tests/run-all.mjs` passou: **42/42**.
 - Fluxo completo com uma saída de sistema **virtual** (kernel `Image` +
   `rootfs.ext4`): a fase `package` publicou
   `giochi-qemu-aarch64-0.1.0.img.xz` + `giochi-qemu-aarch64-0.1.0-Image.xz`,
@@ -300,3 +300,26 @@ Git. O `.gitignore` cobre isso.
 - **Buildroot fica em 2024.02 neste build.** Outra sessão subiu o
   `buildroot.version` para 2025.02 no meio do trabalho; retomar com a versão
   nova forçaria toolchain do zero. A release 0.1.0 foi construída em 2024.02.
+
+## 7.3 Decisões (14/11/2026)
+
+- **A injeção deixou de ser só do alvo virtual.** O artefato do CI é uma imagem
+  de cartão, e a fase `apps` não roda antes dele. Agora o injetor extrai a
+  partição do rootfs com `dd`, altera, confere com `e2fsck -fy` e devolve com
+  `conv=notrunc,fsync`. A tabela e a FAT de boot não são tocadas.
+- **Espaço e `e2fsck` são guardas, não zelo.** Encher o ext4 no meio da escrita
+  trunca arquivo sem erro; um rootfs que não monta dá cartão que liga e não
+  passa do bootloader. Os dois viram recusa com código próprio
+  (`sem_espaco`, `rootfs_corrompido`).
+- **Cartão comprimido é recusado.** Descomprimir 2 GiB só para alterar e
+  recomprimir é trabalho dobrado; o caminho normal (fase `apps` antes do build)
+  não precisa disso.
+- **A fase `apps` RECRIA o diretório de saída.** `copyTree` sobrescrevia mas
+  nunca apagava: app removido do catálogo continuava no overlay. Medido hoje —
+  os jogos saíram do catálogo do Giochi app e as pastas deles seguiram para a
+  imagem, com o `index.json` sem citá-las.
+- **O CI monta a imagem de cartão.** O build entrega `Image`, `rootfs.ext4` e o
+  firmware soltos; gravar isso num cartão não inicializa. O passo novo roda
+  `make-sd-image.sh` com `sudo` só para device que declara firmware em
+  `artifacts`, e devolve o dono dos arquivos com `chown` (o upload roda como o
+  usuário do runner).
