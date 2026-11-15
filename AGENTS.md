@@ -320,27 +320,32 @@ input `system_run_id` permite apontar um run específico em vez do último.
 
 ### Estado da publicação (15/11/2026)
 
-`v0.1.6` é a release boa, publicada pelo `release.yml` sem intervenção:
+`v0.1.8` é a release boa, publicada pelo `release.yml` sem intervenção, e a
+primeira em que o **robô commitou a página**: o commit
+`site: página de download da 0.1.8` é do `github-actions[bot]` no `main`.
+
+Desde a `v0.1.6` os anexos têm nome por aparelho:
 
 | Anexo | O que é |
 | --- | --- |
-| `giochi-powkiddy-x55-0.1.6.img.xz` | cartão SD do X55, 46 MB, 2 GiB descomprimido |
-| `giochi-qemu-aarch64-0.1.6.img.xz` | disco da VM, 15 MB |
-| `giochi-qemu-aarch64-0.1.6-Image.xz` | kernel da VM, 3,7 MB |
+| `giochi-powkiddy-x55-0.1.8.img.xz` | cartão SD do X55, 46 MB, 2 GiB descomprimido |
+| `giochi-qemu-aarch64-0.1.8.img.xz` | disco da VM, 15 MB |
+| `giochi-qemu-aarch64-0.1.8-Image.xz` | kernel da VM, 3,7 MB |
 | `<aparelho>-SHA256SUMS` | checksum daquele aparelho |
 | `<aparelho>-README.txt` | instruções daquele aparelho |
 
-Conferido baixando do GitHub com o `curl`: o `sha256sum -c` do X55 confere, o
+Conferido baixando do GitHub com o `curl`: o `sha256sum -c` do X55 confere, a
 imagem tem tabela de partição válida, `e2fsck -fn` limpo e os 6 apps em
-`/opt/giochi/apps/index.json`.
+`/opt/giochi/apps/index.json`. Na página publicada, os sete links de download
+respondem 200.
 
-As releases `v0.1.1` e `v0.1.2` ficaram com os anexos colidindo (`SHA256SUMS`
-de um aparelho no lugar do outro) — são anteriores às correções de §7.7. Use a
-`v0.1.6` ou mais nova.
+As releases `v0.1.1`, `v0.1.2` e `v0.1.7` estão incompletas — anteriores às
+correções de §7.7 e §7.9. A `v0.1.7`, em particular, publicou os arquivos e
+falhou ao gerar a página. Use a `v0.1.8` ou mais nova.
 
 **O site está no ar.** `https://xtrempkch-droid.github.io/GIOCHI-OS/` serve o
-`index.html` da raiz — conferido com `curl`: 200, o mesmo arquivo do commit
-(172.108 bytes) e os sete links de download respondendo 200.
+`index.html` da raiz — conferido com `curl`: 200 e os sete links de download da
+versão publicada respondendo 200.
 
 Isso funcionou porque o Pages deste repositório está em **"Deploy from a
 branch"**: ele publica o repositório, e o `index.html` da raiz é a página. A
@@ -587,3 +592,24 @@ página existe sem job de deploy, sem artefato de site e sem `build_type`.
 
 O `deploy` e o artefato `giochi-os-site` saíram do workflow. O que sobra é:
 `package` (matriz) → `publish` (release + `index.html` commitado no `main`).
+
+## 7.9 Decisões (15/11/2026, a página no ar)
+
+- **O `flatten` move o manifesto para fora da pasta do aparelho.** Depois dele,
+  `release.json` não está mais em `dist/<device>/`, e sim em
+  `dist/<device>-release.json` — se ficasse dentro, os manifestos colidiriam na
+  release como os outros anexos. O gerador da página só procurava dentro da
+  pasta e falhou em produção na `v0.1.7`: a release saiu inteira e a página
+  parou com "nenhum release.json encontrado". Agora aceita os dois layouts, e
+  dois testes garantem que eles geram **os mesmos links**.
+- **O Pages publica o repositório, não um artefato.** Com `index.html` na raiz,
+  "Deploy from a branch" já serve a página. Todo o caminho `deploy-pages`
+  (permissões `pages`/`id-token`, `upload-pages-artifact`, job `deploy`, troca
+  de `build_type` por API) existia para publicar um diretório gerado e dependia
+  de uma configuração de administrador. Foi removido.
+- **O robô commita a página.** O `publish` gera `index.html` com a versão e os
+  sha256 do dist que ele mesmo publicou, e empurra no `main`. Medido na
+  `v0.1.8`: commit `site: página de download da 0.1.8`, de
+  `github-actions[bot]`, e a página no ar passou a apontar para os anexos da
+  `v0.1.8`. Antes de empurrar ele faz `checkout -B main origin/main` e, se o
+  push falhar, `pull --rebase` uma vez.
