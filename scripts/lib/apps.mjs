@@ -269,6 +269,11 @@ export async function loadApps(appsRoot) {
     const files = [];
     const walkDir = (dir, base) => {
       for (const name of listDir(dir)) {
+        // `.gitkeep` existe para o Git versionar pasta vazia — é marcador de
+        // repositório, não arquivo do app. `hasContent` já o desconsidera ao
+        // decidir se `bin/` tem conteúdo; copiá-lo para dentro da imagem
+        // assinada contradiria essa mesma decisão.
+        if (name === ".gitkeep") continue;
         const full = path.join(dir, name);
         if (statSync(full).isDirectory()) {
           walkDir(full, base);

@@ -1478,6 +1478,24 @@ test("catálogo derivado: sem apps.json e sem pasta nenhuma não é erro", async
   });
 });
 
+test("catálogo derivado: .gitkeep não conta como binário nem entra na imagem", async () => {
+  // Os jogos versionam `bin/.gitkeep` para a pasta existir no Git. Ele é
+  // marcador de repositório, não app: com só ele, o jogo é `scaffold`; com ele
+  // e um binário, o `.gitkeep` não pode ser copiado para a imagem.
+  await withTempDirAsync(async (dir) => {
+    makeJogo(dir, { folder: "so-marcador", binEmpty: true });
+    write(path.join(dir, "so-marcador", "bin", ".gitkeep"), "");
+    makeJogo(dir, { folder: "com-marcador" });
+    write(path.join(dir, "com-marcador", "bin", ".gitkeep"), "");
+
+    const resultado = await loadApps(dir);
+    assert.equal(resultado.ok, true, JSON.stringify(resultado.errors));
+    assert.deepEqual(resultado.embedded.map((a) => a.id), ["com-marcador"]);
+    assert.deepEqual(resultado.skipped.map((s) => s.id), ["so-marcador"]);
+    assert.deepEqual(resultado.embedded[0].files, ["bin/jogo"]);
+  });
+});
+
 // ── mais de um catálogo de apps ─────────────────────────────
 
 test("loadAppsFromRoots junta catálogos de repositórios diferentes", async () => {
