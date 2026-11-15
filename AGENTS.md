@@ -39,13 +39,13 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
   `compress`, `rootfs`, `qemu` e `names`.
 - `site/template.html` + `site/assets/style.css`, com card próprio para alvo
   virtual (bloco "Como iniciar no QEMU" e download do kernel).
-- 51 testes em `tests/pipeline.test.mjs`.
+- 69 testes em `tests/pipeline.test.mjs`.
 - Workflows: `validate.yml` (testes) e `release.yml` (release + Pages).
 - Documentação em `docs/` (3 páginas).
 
 ### Validado nesta sessão
 
-- `node tests/run-all.mjs` passou: **51/51**.
+- `node tests/run-all.mjs` passou: **69/69**.
 - Fluxo completo com uma saída de sistema **virtual** (kernel `Image` +
   `rootfs.ext4`): a fase `package` publicou
   `giochi-qemu-aarch64-0.1.0.img.xz` + `giochi-qemu-aarch64-0.1.0-Image.xz`,
@@ -401,3 +401,32 @@ Git. O `.gitignore` cobre isso.
   dele é `continue-on-error` e o catálogo só entra em `--apps` quando a pasta
   tem conteúdo; sem jogos a imagem sai com os apps e um `::warning::` explica.
   `games_repo` aceita `-` para desligar de vez.
+
+## 7.6 Decisões (15/11/2026, injeção conferida de verdade)
+
+Três defeitos silenciosos no caminho `--inject-apps`, todos só visíveis
+comparando o que foi publicado com o que devia estar lá.
+
+- **`debugfs write` não sobrescreve, e sai com 0.** Num caminho que já existe
+  ele imprime `write: Ext2 file already exists` no stderr e devolve status 0.
+  Confiar no status dava injeção "bem-sucedida" com o conteúdo antigo: medido
+  no `index.json`, que continuou anunciando o catálogo velho enquanto o aviso
+  dizia `apps_injetados`. Agora apaga antes de escrever, e confere o tamanho
+  dentro da imagem — disco cheio no meio do `write` trunca sem erro.
+- **`debugfs mkdir` em diretório existente vaza um inode.** Não é falha, mas
+  aloca um inode e o deixa órfão: `ensureDirectory` repetia o `mkdir` de
+  `/opt/giochi/apps` para cada arquivo do overlay, e `e2fsck -fn` passou a
+  acusar "Pasta de inode N não ligada". Agora só cria o que falta — e existe
+  teste que roda `e2fsck -fn` depois da injeção.
+- **"já tem app" não é prova de estar completo.** O pulo da injeção disparava
+  com `apps.length > 0`. Medido no QEMU: o rootfs trazia 2 apps de um build
+  anterior, a injeção foi pulada e os 4 jogos do catálogo nunca entraram, com o
+  manifesto anunciando 2. O critério passou a ser o catálogo: pula só quando
+  todo app `image` já está lá, senão injeta e avisa `apps_incompletos`.
+- **O caminho do ext4 cru também roda `e2fsck -fy`.** Só o caminho do cartão
+  fazia. Sem ele, um ext4 que o kernel não monta ia para a release com o build
+  verde. Status 1 (consertou) é aceito e vira `corrected: true`.
+
+Medido depois das correções: QEMU com 6 apps e `e2fsck -fn` status 0; cartão X55
+com 6 apps, `e2fsck -fn` status 0 e tabela de partição intacta (3622 → 3642
+inodes, exatamente os 20 arquivos).

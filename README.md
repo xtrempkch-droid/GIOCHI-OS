@@ -133,7 +133,7 @@ Detalhes em [docs/site.md](docs/site.md).
 ## Comandos
 
 ```bash
-node tests/run-all.mjs                              # 61 testes
+node tests/run-all.mjs                              # 69 testes
 node scripts/assemble.mjs apps --apps <app/> --out <staging>            # um catálogo
 node scripts/assemble.mjs apps --apps <app/>,<jogos/> --out <staging>   # dois
 node scripts/assemble.mjs package --system <out/device> --apps <app/> --apps <jogos/> \
@@ -168,7 +168,7 @@ Giochi os/
 
 ## Estado
 
-O que está **verificado**: 51 testes passando — junção, verificação de checksum,
+O que está **verificado**: 69 testes passando — junção, verificação de checksum,
 regra de licença, geração do site com links corretos, publicação de alvo virtual
 (disco + kernel), compressão e leitura do `index.json` de dentro do `rootfs.ext4`.
 
