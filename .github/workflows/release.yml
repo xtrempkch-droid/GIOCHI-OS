@@ -345,17 +345,19 @@ jobs:
           set -euo pipefail
           echo "dist/ tem:"
           find dist -maxdepth 6 | sort | head -80
-          {
-            echo "### Diagnóstico do dist"
-            echo
-            echo '```'
-            find dist -maxdepth 6 | sort | head -80
-            echo '```'
-          } > dist/DIAGNOSTICO-DO-DIST.md
           # Sem esta checagem, um download incompleto viraria um site com menos
           # cards — e o deploy publicaria a página, verde.
           COUNT=$(find dist -name release.json | wc -l)
-          EXPECTED=$(printf '%s' "${{ needs.discover.outputs.devices }}" | tr ',' '\n' | wc -l)
+          # `wc -l` conta CARACTERES DE NOVA LINHA, não linhas: `printf '%s' "a,b"`
+          # vira "a\nb", que tem uma nova linha — dois aparelhos contavam como
+          # um. A conferência existia justamente para pegar aparelho perdido, e
+          # era cega para o caso de dois. Medido na v0.1.2, publicada com os
+          # nomes colidindo e o contador dizendo 1 de 1.
+          #
+          # A contagem agora usa o MESMO JSON da matriz, então não há como a
+          # expectativa e o número de jobs discordarem.
+          EXPECTED=$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).length))' \
+            '${{ needs.discover.outputs.devices_json }}')
           if [ "$COUNT" -ne "$EXPECTED" ]; then
             # A anotação é o único lugar da falha que dá para ler sem baixar
             # log: o `::error::` vira anotação do check-run, e o check-run é
@@ -387,8 +389,6 @@ jobs:
         run: |
           set -euo pipefail
           {
-            cat dist/DIAGNOSTICO-DO-DIST.md
-            echo
             echo "Giochi OS ${{ needs.discover.outputs.version }}"
             echo
             for arquivo in dist/*-README.txt; do

@@ -459,6 +459,14 @@ quando o caminho inteiro roda de verdade.
   qualquer função fora da lista real — e o `validate.yml` roda mesmo quando o
   `release.yml` está inválido, que é o único jeito de essa falha aparecer num
   PR em vez de num release.
+- **`wc -l` conta nova linha, não linha.** A conferência que existia para
+  pegar aparelho perdido era `printf '%s' "a,b" | tr ',' '\n' | wc -l` — que
+  devolve **1** para dois aparelhos, porque a última linha não tem `\n`. Com o
+  download achatado da v0.1.2, o contador dizia "1 de 1" e passava: a checagem
+  era cega exatamente para o caso de dois. Agora a expectativa vem do mesmo
+  JSON que alimenta a matriz (`devices_json`), então não há como divergir.
+  O `::error::` do passo carrega a listagem do `dist`: anotação de check-run é
+  pública, o `stderr` do passo não é — foi assim que o layout real apareceu.
 - **O layout do artefato não é contrato.** A `v0.1.2` publicou com os nomes
   ainda colidindo: o desdobramento supôs `dist/<device>/` e o
   `download-artifact` entregou outro arranjo, então ele não achou nada para

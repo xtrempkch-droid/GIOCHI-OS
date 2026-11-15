@@ -2125,3 +2125,14 @@ test("dois diretórios para o mesmo aparelho é erro", () => {
     assert.ok(layout.errors.some((e) => e.code === "device_repetido"));
   });
 });
+
+test("a expectativa de releases não pode vir de um `wc -l`", () => {
+  // `printf '%s' "a,b" | tr ',' '\n' | wc -l` devolve 1: `wc -l` conta
+  // caracteres de nova linha, e a última linha não tem. A conferência que
+  // existia para pegar aparelho perdido contava dois como um e deixou a v0.1.2
+  // publicar com os nomes colidindo, verde.
+  const fonte = readFileSync(path.join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+  assert.doesNotMatch(fonte, /tr ',' '\\n' \| wc -l/);
+  assert.match(fonte, /JSON\.parse\(process\.argv\[1\]\)\.length/);
+  assert.match(fonte, /needs\.discover\.outputs\.devices_json/);
+});
