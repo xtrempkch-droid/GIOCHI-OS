@@ -2665,6 +2665,8 @@ test("o script troca de idioma substituindo as variáveis também no HTML", () =
 
 const CHAVE_PIX = "6fe4182f-30b3-4c35-9620-ccb8bb7341e0";
 const LINK_DOACAO = "https://link.mercadopago.com.br/giochios";
+const LINK_NUBANK =
+  "https://nubank.com.br/cobrar/i9udv/6afd249c-8e87-428a-9d53-24d16f2e51a2";
 
 test("a página tem a seção de doação, com a chave PIX como texto", () => {
   // O botão de copiar depende de JS (e de contexto seguro); a chave como TEXTO
@@ -2741,11 +2743,59 @@ test("as frases da doação existem nos dez idiomas", () => {
   }
 });
 
+test("a doação oferece as três formas de pagamento", () => {
+  // PIX (qualquer valor), Nubank (R$ 10 fixo) e Mercado Pago (qualquer valor).
+  // O valor fixo tem de estar dito na tela: um botão que cobra R$ 10 sem dizer
+  // é uma cobrança surpresa.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const out = path.join(dir, "index.html");
+    generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+    const html = readFileSync(out, "utf8");
+
+    assert.ok(html.includes(CHAVE_PIX), "PIX por chave");
+    assert.ok(html.includes(LINK_NUBANK), "link do Nubank");
+    assert.ok(html.includes(LINK_DOACAO), "link do Mercado Pago");
+
+    // O valor fixo aparece no título e no botão do cartão do Nubank. O recorte
+    // vai ATÉ DEPOIS do href: o `data-i18n` do botão vem depois do `href` no
+    // atributo, e cortar no link deixava o botão de fora.
+    const posicao = html.indexOf(LINK_NUBANK);
+    const cartao = html.slice(posicao - 1200, posicao + 400);
+    assert.ok(cartao.includes("R$ 10"), "o valor fixo tem de estar no cartão");
+    assert.ok(
+      cartao.includes("donate.nubankTitle") && cartao.includes("donate.nubankButton"),
+      "título e botão do Nubank traduzíveis",
+    );
+  });
+});
+
+test("as frases do Nubank existem nos dez idiomas, com o valor fixo", () => {
+  for (const chave of ["donate.nubankTitle", "donate.nubankText", "donate.nubankButton"]) {
+    for (const idioma of IDIOMAS) {
+      const texto = TEXTOS[idioma.code][chave];
+      assert.ok(texto && texto.trim(), `${idioma.code}: falta ${chave}`);
+      // O valor tem de estar em toda frase que o cobra — é a mesma regra do
+      // botão: cobrança sem valor dito é cobrança surpresa.
+      assert.ok(texto.includes("R$ 10"), `${idioma.code}/${chave}: sem o valor fixo`);
+    }
+  }
+});
+
 test("o link de doação abre em aba nova com rel seguro", () => {
   // `target="_blank"` sem `rel="noopener"` deixa a página aberta manipulável
   // pelo destino.
   const template = readFileSync(path.join(ROOT, "site", "template.html"), "utf8");
-  const bloco = template.slice(template.indexOf(LINK_DOACAO) - 300, template.indexOf(LINK_DOACAO) + 300);
-  assert.ok(bloco.includes('target="_blank"'));
-  assert.match(bloco, /rel="noopener noreferrer"/);
+  for (const link of [LINK_DOACAO, LINK_NUBANK]) {
+    const bloco = template.slice(template.indexOf(link) - 300, template.indexOf(link) + 300);
+    assert.ok(bloco.includes('target="_blank"'), `${link}: sem target`);
+    assert.match(bloco, /rel="noopener noreferrer"/, `${link}: sem rel seguro`);
+  }
 });

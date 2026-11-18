@@ -509,7 +509,9 @@ pre code{color:var(--accent)}
 .doar-grid{
   display:grid;gap:18px;margin-top:28px;
   grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-  max-width:820px;
+  /* Largura para três cartões numa linha em tela grande (3×280 + 2×18 de
+     espaçamento); abaixo disso o `auto-fit` quebra em duas e depois uma. */
+  max-width:1000px;
 }
 .doar-card{
   background:var(--panel);border:1px solid var(--line);

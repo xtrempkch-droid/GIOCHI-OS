@@ -211,6 +211,9 @@ export const TEXTOS = {
     "donate.note": "Donations pay for test devices and build time — nothing is charged for the system, and nothing in it changes because of a donation.",
     "donate.copied": "Key copied.",
     "donate.copyFailed": "Could not copy automatically — select the key and copy it.",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "A fixed charge of R$ 10,00, paid by PIX from Nubank or any other bank.",
+    "donate.nubankButton": "Pay R$ 10,00",
   },
 
   zh: {
@@ -358,6 +361,9 @@ export const TEXTOS = {
     "donate.note": "捐款用于购买测试设备和构建时间 —— 系统本身不收费，也不会因为捐款而改变任何内容。",
     "donate.copied": "已复制密钥。",
     "donate.copyFailed": "无法自动复制 —— 请选中密钥并复制。",
+    "donate.nubankTitle": "Nubank（R$ 10）",
+    "donate.nubankText": "固定 R$ 10,00 收款，可用 Nubank 或任何其他银行通过 PIX 支付。",
+    "donate.nubankButton": "支付 R$ 10,00",
   },
 
   hi: {
@@ -508,6 +514,9 @@ export const TEXTOS = {
     "donate.note": "सहयोग टेस्ट डिवाइस और बिल्ड समय के लिए जाता है — सिस्टम के लिए कुछ नहीं लिया जाता, और सहयोग से इसमें कुछ नहीं बदलता।",
     "donate.copied": "कुंजी कॉपी हो गई।",
     "donate.copyFailed": "अपने आप कॉपी नहीं हो सका — कुंजी चुनकर कॉपी करें।",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "R$ 10,00 का निश्चित भुगतान, Nubank या किसी भी बैंक से PIX द्वारा।",
+    "donate.nubankButton": "R$ 10,00 दें",
   },
 
   es: {
@@ -661,6 +670,9 @@ export const TEXTOS = {
     "donate.note": "Las donaciones pagan los equipos de prueba y el tiempo de compilación — no se cobra por el sistema, y nada en él cambia por una donación.",
     "donate.copied": "Clave copiada.",
     "donate.copyFailed": "No se pudo copiar automáticamente — selecciona la clave y cópiala.",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "Cobro fijo de R$ 10,00, pagado por PIX desde Nubank o cualquier otro banco.",
+    "donate.nubankButton": "Pagar R$ 10,00",
   },
 
   fr: {
@@ -814,6 +826,9 @@ export const TEXTOS = {
     "donate.note": "Les dons paient le matériel de test et le temps de compilation — rien n'est facturé pour le système, et rien n'y change à cause d'un don.",
     "donate.copied": "Clé copiée.",
     "donate.copyFailed": "Copie automatique impossible — sélectionnez la clé et copiez-la.",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "Encaissement fixe de R$ 10,00, payé par PIX depuis Nubank ou toute autre banque.",
+    "donate.nubankButton": "Payer R$ 10,00",
   },
 
   ar: {
@@ -963,6 +978,9 @@ export const TEXTOS = {
     "donate.note": "التبرعات تدفع ثمن أجهزة الاختبار ووقت البناء — لا يُتقاضى شيء مقابل النظام، ولا يتغيّر فيه شيء بسبب تبرّع.",
     "donate.copied": "تم نسخ المفتاح.",
     "donate.copyFailed": "تعذّر النسخ تلقائيًا — حدّد المفتاح وانسخه.",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "مبلغ ثابت قدره R$ 10,00، يُدفع عبر PIX من Nubank أو أي بنك آخر.",
+    "donate.nubankButton": "ادفع R$ 10,00",
   },
 
   bn: {
@@ -1112,6 +1130,9 @@ export const TEXTOS = {
     "donate.note": "অনুদান টেস্ট ডিভাইস ও বিল্ড সময়ে যায় — সিস্টেমের জন্য কোনো টাকা নেওয়া হয় না, আর অনুদানে এতে কিছু বদলায় না।",
     "donate.copied": "কী কপি হয়েছে।",
     "donate.copyFailed": "স্বয়ংক্রিয়ভাবে কপি হয়নি — কীটি নির্বাচন করে কপি করুন।",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "R$ 10,00 নির্দিষ্ট চার্জ, Nubank বা যেকোনো ব্যাংক থেকে PIX-এ পরিশোধযোগ্য।",
+    "donate.nubankButton": "R$ 10,00 দিন",
   },
 
   pt: {
@@ -1264,6 +1285,9 @@ export const TEXTOS = {
     "donate.note": "A doação paga aparelho de teste e tempo de build — nada é cobrado pelo sistema, e nada nele muda por causa de uma doação.",
     "donate.copied": "Chave copiada.",
     "donate.copyFailed": "Não foi possível copiar automaticamente — selecione a chave e copie.",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "Cobrança fixa de R$ 10,00, paga por PIX do Nubank ou de qualquer outro banco.",
+    "donate.nubankButton": "Pagar R$ 10,00",
   },
 
   ru: {
@@ -1417,6 +1441,9 @@ export const TEXTOS = {
     "donate.note": "Пожертвования оплачивают тестовые устройства и время сборки — за систему не берётся ничего, и от пожертвования в ней ничего не меняется.",
     "donate.copied": "Ключ скопирован.",
     "donate.copyFailed": "Не удалось скопировать автоматически — выделите ключ и скопируйте.",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "Фиксированный платёж R$ 10,00 через PIX из Nubank или любого другого банка.",
+    "donate.nubankButton": "Оплатить R$ 10,00",
   },
 
   ur: {
@@ -1566,6 +1593,9 @@ export const TEXTOS = {
     "donate.note": "عطیات ٹیسٹ ڈیوائس اور بلڈ کے وقت پر خرچ ہوتے ہیں — نظام کا کوئی معاوضہ نہیں، اور عطیے سے اس میں کچھ نہیں بدلتا۔",
     "donate.copied": "کلید کاپی ہو گئی۔",
     "donate.copyFailed": "خودکار کاپی نہیں ہو سکی — کلید منتخب کر کے کاپی کریں۔",
+    "donate.nubankTitle": "Nubank (R$ 10)",
+    "donate.nubankText": "R$ 10,00 کی مقررہ ادائیگی، Nubank یا کسی بھی بینک سے PIX کے ذریعے۔",
+    "donate.nubankButton": "R$ 10,00 ادا کریں",
   },
 };
 

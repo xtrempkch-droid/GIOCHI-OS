@@ -65,8 +65,13 @@ português no meio de uma página em árabe.
 
 ## Doação
 
-No fim da página, depois de licenças: chave **PIX** e link do **Mercado Pago**,
-com valor livre.
+No fim da página, depois de licenças:
+
+| Forma | Valor | Como |
+| --- | --- | --- |
+| **PIX** | livre | chave `6fe4182f-…` como texto + botão de copiar |
+| **Nubank** | **R$ 10,00 fixo** | link de cobrança do Nubank |
+| **Mercado Pago** | livre | cartão, boleto ou PIX |
 
 | Aspecto | Como funciona |
 | --- | --- |

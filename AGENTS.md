@@ -701,9 +701,17 @@ quem testa. `comVars()` passou a servir as duas.
 ## 7.12 Decisões (17/11/2026, doação)
 
 No fim da página há um espaço para quem quiser ajudar a comprar equipamentos de
-teste ou cobrir os custos do projeto: chave **PIX**
-(`6fe4182f-30b3-4c35-9620-ccb8bb7341e0`) e um link do Mercado Pago, com valor
-livre.
+teste ou cobrir os custos do projeto, com três formas:
+
+| Forma | Valor |
+| --- | --- |
+| **PIX** por chave (`6fe4182f-30b3-4c35-9620-ccb8bb7341e0`) | livre |
+| **Nubank** (link de cobrança) | **fixo, R$ 10,00** |
+| **Mercado Pago** (cartão, boleto ou PIX) | livre |
+
+- **O valor fixo é dito na tela.** O link do Nubank cobra R$ 10,00 e o título e
+  o botão dizem isso nos dez idiomas — um botão que cobra sem dizer é cobrança
+  surpresa. Um teste percorre as dez traduções exigindo o valor na frase.
 
 - **A chave aparece como TEXTO, não só como botão.** `navigator.clipboard` exige
   contexto seguro: funciona em `https://`, **não** em `file://` — e a página é
