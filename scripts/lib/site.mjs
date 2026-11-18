@@ -343,6 +343,64 @@ const SCRIPT_IDIOMA = String.raw`
 })();
 `;
 
+// ── copiar a chave PIX ─────────────────────────────────────
+//
+// `navigator.clipboard` exige contexto seguro: em `https://` funciona, em
+// `file://` não (e a página é feita para abrir do disco também). Por isso o
+// caminho antigo (`select` + `execCommand`) existe aqui, e por isso a chave
+// aparece como TEXTO ao lado do botão: se os dois caminhos falharem, ainda dá
+// para selecionar e copiar na mão.
+//
+// As mensagens vêm do dicionário (`donate.copied` / `donate.copyFailed`), então
+// o aviso também troca de idioma.
+const SCRIPT_PIX = String.raw`
+(function () {
+  var botao = document.getElementById("copiar-pix");
+  var chave = document.getElementById("chave-pix");
+  var estado = document.getElementById("copiar-estado");
+  var dados = JSON.parse(document.getElementById("i18n-dados").textContent);
+  if (!botao || !chave || !estado) return;
+
+  function avisar(chaveTexto) {
+    var atual = document.documentElement.lang.split("-")[0];
+    var textos = dados.textos[atual] || dados.textos[dados.padrao];
+    estado.textContent = textos[chaveTexto];
+  }
+
+  function selecionar() {
+    var faixa = document.createRange();
+    faixa.selectNodeContents(chave);
+    var selecao = window.getSelection();
+    selecao.removeAllRanges();
+    selecao.addRange(faixa);
+  }
+
+  botao.addEventListener("click", function () {
+    var valor = chave.textContent.trim();
+    selecionar();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(valor).then(
+        function () { avisar("donate.copied"); },
+        function () { avisar("donate.copyFailed"); }
+      );
+      return;
+    }
+    try {
+      avisar(document.execCommand("copy") ? "donate.copied" : "donate.copyFailed");
+    } catch (erro) {
+      avisar("donate.copyFailed");
+    }
+  });
+
+  // O aviso some quando o idioma muda? Não: ele é reescrito na próxima cópia.
+  // Mas se o visitante troca de idioma com o aviso na tela, ele fica no idioma
+  // antigo — então limpamos.
+  document.addEventListener("click", function (evento) {
+    if (evento.target.closest && evento.target.closest("[data-lang]")) estado.textContent = "";
+  });
+})();
+`;
+
 function renderIdiomas(atual) {
   return IDIOMAS.map((idioma) => renderIdioma(idioma, atual)).join("\n              ");
 }
@@ -839,7 +897,7 @@ export function generateSite({
     .replaceAll("<!--GENERATED-->", geradoEm)
     .replaceAll("<!--DATA-->", geradoEm.slice(0, 10))
     .replaceAll("<!--COUNT-->", String(releases.length))
-    .replace("<!--SCRIPT-->", SCRIPT_IDIOMA.trim());
+    .replace("<!--SCRIPT-->", `${SCRIPT_IDIOMA.trim()}\n${SCRIPT_PIX.trim()}`);
 
   // Preencher o idioma padrão DEPOIS de todo o resto: o bloco de dados que
   // entra abaixo já contém textos em todos os idiomas, e preenchê-lo com o

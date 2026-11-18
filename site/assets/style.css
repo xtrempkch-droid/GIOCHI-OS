@@ -493,3 +493,53 @@ pre code{color:var(--accent)}
   font-size:11px;color:var(--accent);direction:ltr;unicode-bidi:embed;
 }
 .marca-nota{color:var(--warn);font-size:15px;line-height:1}
+
+/* ── doação ───────────────────────────── */
+/*
+  Fica no fim, depois de licenças: quem chegou até aqui já sabe se o sistema
+  serve. O tom é de convite, não de pedágio — sem banner, sem contador, sem
+  animação pedindo atenção.
+*/
+.section-doar{
+  border-top:1px solid var(--line2);
+  background:
+    radial-gradient(ellipse 60% 80% at 50% 100%, rgba(102,192,244,0.10) 0%, transparent 70%),
+    rgba(15,22,33,0.5);
+}
+.doar-grid{
+  display:grid;gap:18px;margin-top:28px;
+  grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+  max-width:820px;
+}
+.doar-card{
+  background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--radius);padding:22px;
+  display:flex;flex-direction:column;gap:10px;
+}
+.doar-card h3{font-size:15px}
+.doar-card .btn{align-self:flex-start;margin-top:4px}
+
+.chave-pix{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+  margin-top:4px;
+  background:rgba(0,0,0,0.45);border:1px solid var(--line);
+  border-radius:10px;padding:10px 12px;
+}
+.chave-pix code{
+  flex:1 1 220px;min-width:0;
+  font-size:12px;color:var(--accent);
+  overflow-wrap:anywhere;line-height:1.5;
+  user-select:all;
+}
+.btn-copiar{
+  min-height:34px;padding:0 12px;font-size:12px;font-weight:700;
+  background:rgba(102,192,244,0.14);border-color:rgba(102,192,244,0.35);
+  color:var(--accent);
+}
+.btn-copiar:hover{background:rgba(102,192,244,0.22);border-color:var(--accent)}
+#copiar-estado{min-height:1.2em;color:var(--ok);margin:0}
+.section-doar > .wrap > .muted.small{max-width:70ch;margin-top:20px;opacity:0.85}
+
+/* A chave é uma string, não uma frase: nunca espelha em RTL. */
+[dir="rtl"] .chave-pix{direction:ltr}
+[dir="rtl"] .chave-pix code{text-align:start}

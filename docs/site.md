@@ -63,6 +63,22 @@ aviso, não detalhe.
 A frase é traduzida e o dado não: escrever a frase inteira no dado a deixaria em
 português no meio de uma página em árabe.
 
+## Doação
+
+No fim da página, depois de licenças: chave **PIX** e link do **Mercado Pago**,
+com valor livre.
+
+| Aspecto | Como funciona |
+| --- | --- |
+| Chave PIX | texto visível, `dir="ltr"`, **sem** `data-i18n` |
+| Botão copiar | `clipboard.writeText` → `execCommand("copy")` → seleção manual |
+| Aviso de cópia | `donate.copied` / `donate.copyFailed`, traduzidos nos dez |
+| Link | `target="_blank"` + `rel="noopener noreferrer"` |
+
+A chave fica como texto porque `navigator.clipboard` exige contexto seguro e não
+funciona em `file://` — que é um dos modos de abrir a página. O botão é conforto;
+o texto é o que garante.
+
 ## Idiomas
 
 O mesmo `index.html` fala os dez idiomas mais falados do mundo: inglês, chinês,
@@ -100,7 +116,7 @@ teclado e não dependem de hover (que não existe em tela de toque).
 | Baixar | um item por aparelho + "conferir o checksum" |
 | Instalar | cartão SD, máquina virtual, checksum |
 | Aparelhos | lista, tabela de requisitos e um item por aparelho |
-| Projeto | como é feito, repositórios, licenças |
+| Projeto | como é feito, repositórios, licenças, doação |
 | — | seletor de idioma, com os dez nomes no próprio alfabeto |
 
 ## Publicar

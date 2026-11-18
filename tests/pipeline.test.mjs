@@ -2463,9 +2463,15 @@ test("o dicionário e o template falam das mesmas chaves", () => {
     const usadas = new Set(
       [...semComentario.matchAll(/data-i18n(?:-html|-content)?="([^"]+)"/g)].map((m) => m[1]),
     );
-    // Estas duas só aparecem em estados excepcionais: imagem não publicada e
-    // nenhum alvo virtual. Não usá-las no caso normal é o esperado.
-    const condicionais = new Set(["card.unavailable", "qemu.empty"]);
+    // Umas aparecem só em estados excepcionais (imagem não publicada, nenhum
+    // alvo virtual); outras só são escritas pelo script (o aviso de cópia da
+    // chave PIX). Não usá-las no HTML estático é o esperado.
+    const condicionais = new Set([
+      "card.unavailable",
+      "qemu.empty",
+      "donate.copied",
+      "donate.copyFailed",
+    ]);
     const sobrando = Object.keys(TEXTOS[PADRAO]).filter(
       (chave) => !usadas.has(chave) && !condicionais.has(chave),
     );
@@ -2653,4 +2659,93 @@ test("o script troca de idioma substituindo as variáveis também no HTML", () =
   assert.match(script, /function comVars\(/, "tem de existir uma função de substituição");
   assert.match(script, /comHtml\[j\]\.innerHTML = comVars\(comHtml\[j\], t\[k2\]\)/);
   assert.match(script, /alvos\[i\]\.textContent = comVars\(alvos\[i\], valor\)/);
+});
+
+// ── doação ──────────────────────────────────────────────────
+
+const CHAVE_PIX = "6fe4182f-30b3-4c35-9620-ccb8bb7341e0";
+const LINK_DOACAO = "https://link.mercadopago.com.br/giochios";
+
+test("a página tem a seção de doação, com a chave PIX como texto", () => {
+  // O botão de copiar depende de JS (e de contexto seguro); a chave como TEXTO
+  // é o que salva quem abre por `file://` ou com a área de transferência
+  // bloqueada. Só botão seria um botão inútil em metade dos casos.
+  withTempDir((dir) => {
+    const dist = makeSiteFixture(dir);
+    const out = path.join(dir, "index.html");
+    generateSite({
+      distDir: dist,
+      outDir: out,
+      templatePath: path.join(ROOT, "site", "template.html"),
+      stylePath: path.join(ROOT, "site", "assets", "style.css"),
+      singleFile: true,
+      repo: "dono/repo",
+    });
+    const html = readFileSync(out, "utf8");
+
+    assert.match(html, /<section id="doar"/);
+    assert.ok(html.includes(CHAVE_PIX), "a chave PIX tem de estar no HTML");
+    assert.ok(html.includes(`href="${LINK_DOACAO}"`), "o link de doação tem de estar no HTML");
+    // A chave não pode vir de JS: se o script falhar, ela tem de estar lá.
+    const semScript = html.replace(/<script[\s\S]*?<\/script>/g, "");
+    assert.ok(semScript.includes(CHAVE_PIX), "a chave não pode depender do script");
+  });
+});
+
+test("a chave PIX nunca é tratada como texto traduzível", () => {
+  // Ela é uma string, não uma frase: traduzir, espelhar em RTL ou escapar
+  // quebraria a colagem no app do banco.
+  const template = readFileSync(path.join(ROOT, "site", "template.html"), "utf8");
+  const inicio = template.indexOf('<code id="chave-pix"');
+  const fim = template.indexOf("</code>", inicio);
+  assert.ok(inicio > 0, "o elemento da chave tem de existir");
+  const elemento = template.slice(inicio, fim);
+  assert.ok(elemento.includes(CHAVE_PIX), "a chave literal tem de estar no elemento");
+  assert.ok(elemento.includes('dir="ltr"'), "a chave tem de forçar LTR");
+  // O botão ao lado TEM `data-i18n` ("Copiar chave") — é o elemento da chave
+  // que não pode ter, senão o script sobrescreveria o valor.
+  assert.ok(!elemento.includes("data-i18n"), "a chave não pode ter data-i18n");
+});
+
+test("a doação entra no menu e no fim da página", () => {
+  // "No fim do site" e alcançável pelo submenu Projeto — quem procura não deve
+  // ter de rolar até o rodapé.
+  const template = readFileSync(path.join(ROOT, "site", "template.html"), "utf8");
+  assert.ok(template.includes('href="#doar"'), "falta o item de menu");
+  const posDoar = template.indexOf('<section id="doar"');
+  const posFimMain = template.indexOf("</main>");
+  assert.ok(posDoar > 0 && posDoar < posFimMain, "a seção fica antes do </main>");
+  // Depois de licenças, que é a última seção de conteúdo.
+  assert.ok(posDoar > template.indexOf('<section id="licencas"'));
+});
+
+test("as frases da doação existem nos dez idiomas", () => {
+  for (const chave of [
+    "nav.donate",
+    "donate.title",
+    "donate.lede",
+    "donate.pixTitle",
+    "donate.pixText",
+    "donate.copy",
+    "donate.cardTitle",
+    "donate.cardText",
+    "donate.cardButton",
+    "donate.note",
+    "donate.copied",
+    "donate.copyFailed",
+  ]) {
+    for (const idioma of IDIOMAS) {
+      const texto = TEXTOS[idioma.code][chave];
+      assert.ok(texto && texto.trim(), `${idioma.code}: falta ${chave}`);
+    }
+  }
+});
+
+test("o link de doação abre em aba nova com rel seguro", () => {
+  // `target="_blank"` sem `rel="noopener"` deixa a página aberta manipulável
+  // pelo destino.
+  const template = readFileSync(path.join(ROOT, "site", "template.html"), "utf8");
+  const bloco = template.slice(template.indexOf(LINK_DOACAO) - 300, template.indexOf(LINK_DOACAO) + 300);
+  assert.ok(bloco.includes('target="_blank"'));
+  assert.match(bloco, /rel="noopener noreferrer"/);
 });

@@ -697,3 +697,29 @@ Medido no caminho: o script do navegador tinha duas listas (`data-i18n` e
 segunda, então o texto trocava de idioma e deixava `{modelo}` cru na tela. Ficou
 invisível para quem tem o idioma do navegador igual ao padrão — que é o caso de
 quem testa. `comVars()` passou a servir as duas.
+
+## 7.12 Decisões (17/11/2026, doação)
+
+No fim da página há um espaço para quem quiser ajudar a comprar equipamentos de
+teste ou cobrir os custos do projeto: chave **PIX**
+(`6fe4182f-30b3-4c35-9620-ccb8bb7341e0`) e um link do Mercado Pago, com valor
+livre.
+
+- **A chave aparece como TEXTO, não só como botão.** `navigator.clipboard` exige
+  contexto seguro: funciona em `https://`, **não** em `file://` — e a página é
+  feita para abrir do disco também. Se o botão falhar, a chave ainda pode ser
+  selecionada e copiada na mão. Botão sozinho seria um botão inútil em metade
+  dos casos.
+- **Três caminhos no script, um aviso.** `clipboard.writeText` (moderno),
+  `select` + `execCommand("copy")` (o antigo, para `file://`) e o texto
+  selecionável (quando os dois falham). O aviso é traduzido:
+  `donate.copied` / `donate.copyFailed`, nos dez idiomas como o resto.
+- **A chave não é traduzível.** Ela é uma string, não uma frase: o elemento tem
+  `dir="ltr"` e **nenhum** `data-i18n` — traduzir, espelhar em RTL ou escapar
+  quebraria a colagem no app do banco. Um teste fixa isso.
+- **Link externo com `rel="noopener noreferrer"`.** `target="_blank"` sozinho
+  deixa a página aberta manipulável pelo destino.
+- **Tom de convite, não de pedágio.** Sem banner, sem contador, sem animação
+  pedindo atenção, e a nota diz que nada no sistema muda por causa de uma
+  doação. Fica depois de licenças, no fim: quem chegou até ali já sabe se o
+  sistema serve.

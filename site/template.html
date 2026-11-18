@@ -69,6 +69,7 @@
               <li><a href="#sobre" data-i18n="nav.about"></a></li>
               <li><a href="#repos" data-i18n="nav.repos"></a></li>
               <li><a href="#licencas" data-i18n="nav.license"></a></li>
+              <li><a href="#doar" data-i18n="nav.donate"></a></li>
             </ul>
           </details>
         </li>
@@ -281,6 +282,43 @@
         </div>
       </div>
       <p class="muted small" data-i18n="license.note"></p>
+    </div>
+  </section>
+
+  <!--
+    Doação no fim da página: quem chegou até aqui leu tudo, e é o momento em que
+    a pergunta "isso me serve?" já foi respondida.
+
+    A chave PIX aparece como TEXTO, não só como botão de copiar: sem JS (ou com
+    a área de transferência bloqueada, que é o padrão em `file://`), ainda dá
+    para selecionar e copiar na mão. Botão sem o texto ao lado seria um botão
+    inútil em metade dos casos.
+  -->
+  <section id="doar" class="section section-doar">
+    <div class="wrap">
+      <h2 class="h2" data-i18n="donate.title"></h2>
+      <p class="muted" data-i18n="donate.lede"></p>
+
+      <div class="doar-grid">
+        <div class="doar-card">
+          <h3 data-i18n="donate.pixTitle"></h3>
+          <p class="muted small" data-i18n="donate.pixText"></p>
+          <div class="chave-pix">
+            <code id="chave-pix" dir="ltr">6fe4182f-30b3-4c35-9620-ccb8bb7341e0</code>
+            <button type="button" class="btn btn-copiar" id="copiar-pix" data-i18n="donate.copy"></button>
+          </div>
+          <p class="muted small" id="copiar-estado" role="status" aria-live="polite"></p>
+        </div>
+
+        <div class="doar-card">
+          <h3 data-i18n="donate.cardTitle"></h3>
+          <p class="muted small" data-i18n="donate.cardText"></p>
+          <a class="btn btn-primary" href="https://link.mercadopago.com.br/giochios"
+             target="_blank" rel="noopener noreferrer" data-i18n="donate.cardButton"></a>
+        </div>
+      </div>
+
+      <p class="muted small" data-i18n="donate.note"></p>
     </div>
   </section>
 
