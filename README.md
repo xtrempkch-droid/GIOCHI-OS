@@ -101,6 +101,15 @@ solto, o `debugfs` lê `/opt/giochi/apps/index.json` de dentro dele. Se o overla
 da fase 1 ficou de fora do build, a release avisa `overlay_ausente` e **não**
 anuncia os apps do catálogo como embutidos.
 
+**A loja e o PortMaster têm rotas separadas, e a release diz qual vale.** App
+de `distribution: "store"` não entra na imagem: vai para `apps.store` e o site
+mostra o que **não** está lá. O PortMaster é sideload em `/user` — o pacote dele
+tem GPL-2.0 e LGPL-2.1 dentro e não pode entrar na raiz assinada —, mas o
+**runtime** (python3 + bubblewrap, `/roms` → `/user`, `OS_NAME` no `os-release`)
+precisa estar na imagem. A junção lê essas cinco peças com `debugfs` e publica
+`input.portmaster` com o estado real: `runtime: false` quando o build não ligou
+o opt-in, `portmaster_incompleto` quando ligou e faltou peça.
+
 **O controle virtual também é verificado.** O `Giochi Gamepad` é o que faz o
 mesmo jogo responder igual em todo aparelho; sem as peças, o aparelho continua
 bootando e os jogos abrem — cada um no layout daquele aparelho, sem erro em
@@ -178,10 +187,10 @@ Giochi os/
 
 ## Estado
 
-O que está **verificado**: 126 testes passando — junção, verificação de checksum,
+O que está **verificado**: 133 testes passando — junção, verificação de checksum,
 regra de licença, geração do site com links corretos, publicação de alvo virtual
-(disco + kernel), compressão, leitura do `index.json` de dentro do `rootfs.ext4`
-e verificação do controle virtual na imagem.
+(disco + kernel), compressão, leitura do `index.json` de dentro do `rootfs.ext4`,
+verificação do controle virtual e do runtime do PortMaster na imagem.
 
 O que **não** está: nenhum build de hardware rodado a partir daqui. A montagem do
 cartão (`genimage`/`make-sd-image.sh`) é do Giochi System; este repositório só

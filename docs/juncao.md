@@ -297,6 +297,8 @@ como cartão.
 | Imagem ausente | erro na fase 2, aviso na geração do site |
 | Só kernel + rootfs (alvo virtual) | publica disco + kernel, com aviso `sem_cartao` |
 | Overlay de apps fora do build | `overlay_ausente`; manifesto não anuncia app ausente |
+| PortMaster ligado no build e runtime incompleto | `portmaster_incompleto`; manifesto publica o que falta |
+| PortMaster sem o opt-in do sistema | `input.portmaster.runtime: false`, sem aviso |
 | Controle virtual incompleto na imagem | `gamepad_incompleto`; `input.virtualGamepad` publica o que falta |
 | Mapa sem calibração de eixo | `mapa_sem_calibracao` (aviso; a imagem é publicada) |
 | Imagem comprimida na origem, sem `debugfs`/`sfdisk` | `gamepad_nao_verificado`; `checked: false` |
@@ -477,3 +479,85 @@ toca a imagem: o aparelho baixa depois, e a release publica o app em
 A escolha não é técnica — é de licença e de ciclo de atualização. App GPL não
 pode entrar na raiz assinada (regra verificada na fase `apps`), e app que muda
 toda semana não deveria exigir regravar o cartão.
+
+## Loja, sideload e PortMaster — as quatro rotas
+
+A pergunta "este app está na imagem?" tem mais de duas respostas, e confundir
+uma com a outra é o defeito que aparece depois: o usuário instala pela loja, o
+app não abre, e o build estava verde.
+
+| Rota | No catálogo | Onde vive | A junção faz o quê |
+| --- | --- | --- | --- |
+| embutido | `distribution: "image"` | rootfs assinado | copia para o overlay; confere na imagem |
+| loja | `distribution: "store"` | `/user/apps` | **só lista** em `apps.store` |
+| PC do usuário | `distribution: "host"` | PC | ignora (o site não mostra) |
+| sideload | fora do catálogo | `/user/ports` (PortMaster) | garante o **runtime** na imagem |
+
+As três primeiras são do catálogo. A quarta não passa por ele: o PortMaster
+instala os ports por conta própria, e o que a junção pode garantir é que a
+imagem tem o que ele precisa para rodar.
+
+### A loja: o pacote é assinado, o PortMaster não
+
+O caminho da loja é `pasta → .giochi assinado (Ed25519) → aparelho → executa`,
+e o aparelho não baixa nem compila nada: ele extrai e roda. É o que mantém o
+rootfs pequeno e substituível.
+
+O PortMaster é o oposto em garantia: baixa `.zip` de um repositório público,
+**sem assinatura**, e executa o `.sh` de dentro como root. Por isso ele é
+instalado em `/user` e roda dentro do `bubblewrap` (rootfs somente-leitura,
+namespaces próprios) — o que o sistema garante é o sandbox, não o conteúdo. O
+launcher mostra o port como port, não como app da loja.
+
+O pacote do PortMaster **não entra na imagem**: carrega `gptokeyb2` (GPL-2.0) e
+`7zzs` (LGPL-2.1), e a regra de licença recusa os dois na raiz assinada. O que a
+imagem pode levar é o runtime.
+
+### O runtime do PortMaster, e o que a junção confere
+
+Opt-in no build do sistema (`GIOCHI_WITH_PORTMASTER=1`, **22,9 MiB** medidos —
+python3 com a stdlib em `.pyc` é o grosso). A junção lê da imagem:
+
+| Peça | Caminho | Sem ela |
+| --- | --- | --- |
+| interpretador | `/usr/bin/python3` (executável) | o `pugwash` é `#!/usr/bin/env python3`; a GUI não abre |
+| sandbox | `/usr/bin/bwrap` (executável) | o `giochi-ports` **recusa** rodar port sem isolamento |
+| invólucro | `/usr/bin/giochi-ports` (executável) | não há quem ache o pacote, monte o sandbox e encaminhe sinal |
+| caminho dos ports | `/roms` → `/user` (symlink) | 28% dos ports citam `/roms` literal (7 de 25 medidos) |
+| nome do sistema | `/usr/lib/os-release` com `OS_NAME="Giochi"` | o PortMaster classifica o CFW como `Buildroot` e procura `mod_Buildroot.txt` |
+
+O resultado vai para `release.json` em `input.portmaster`:
+
+```json
+"portmaster": {
+  "checked": true,
+  "runtime": true,
+  "complete": true,
+  "present": ["python3", "bwrap", "giochi-ports"],
+  "missing": [],
+  "notExecutable": [],
+  "roms": "/user",
+  "user": "directory",
+  "osName": "Giochi"
+}
+```
+
+`python3` presente é o sinal de que o opt-in foi ligado. A partir daí, peça
+faltando é defeito e vira o aviso `portmaster_incompleto` — o pacote instala e
+não roda, e o sintoma no aparelho é a GUI não abrir. `runtime: false` é um estado
+**legítimo** (build sem o opt-in) e não gera aviso: transformar escolha de build
+em alarme ensina a ignorar alarme. O `README.txt` do aparelho diz qual dos dois
+casos é o daquela imagem.
+
+### O que a junção não verifica
+
+- **o pacote em `/user`** — ele é instalado depois, pela loja ou à mão;
+- **`CONFIG_USER_NS`** — o sandbox depende dele, e a config do kernel não vem em
+  `out/<device>/`;
+- **`CONFIG_INPUT_UINPUT`** e `/dev/uinput` — mesma razão, e é o item do
+  controle virtual.
+
+Os três ficam para o `giochi-selftest` no aparelho, que reporta
+`[PASS] PortMaster … instalado, com python3, sandbox e /roms`. A divisão é
+deliberada: a junção responde pelo que está **no arquivo publicado**, o aparelho
+responde pelo que só existe depois do boot.

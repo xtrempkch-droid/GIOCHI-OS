@@ -37,10 +37,11 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
 - `scripts/build-site.mjs` gerando site autocontido, e
   `scripts/flatten-release.mjs` desdobrando os anexos de vários aparelhos.
 - `scripts/lib/` com os módulos `fs`, `system`, `apps`, `pipeline`, `site`,
-  `compress`, `rootfs`, `inject`, `gamepad`, `qemu`, `names` e `release-assets`.
+  `compress`, `rootfs`, `inject`, `gamepad`, `portmaster`, `qemu`, `names` e
+  `release-assets`.
 - `site/template.html` + `site/assets/style.css`, com card próprio para alvo
   virtual (bloco "Como iniciar no QEMU" e download do kernel).
-- 126 testes em `tests/pipeline.test.mjs`.
+- 133 testes em `tests/pipeline.test.mjs`.
 - Workflows: `validate.yml` (testes) e `release.yml` (`discover` → `package`
   matriz → `publish` → `deploy`).
 - Documentação em `docs/` (3 páginas).
@@ -99,6 +100,7 @@ Giochi os/
 │       ├── compress.mjs       # xz/zstd com queda para gzip
 │       ├── rootfs.mjs         # lê apps de dentro do ext4 (debugfs)
 │       ├── gamepad.mjs        # as 4 peças do controle virtual na imagem
+│       ├── portmaster.mjs     # o runtime de ports (opt-in) na imagem
 │       ├── inject.mjs         # escreve overlay no ext4 sem montar
 │       ├── qemu.mjs           # comando de boot do alvo virtual
 │       ├── release-assets.mjs # layout + nomes dos anexos da release
@@ -772,3 +774,45 @@ responde no layout daquele aparelho, sem erro em lugar nenhum.
 Medido com o `assemble` nesta máquina: a imagem local do R35S de 15/11/2026
 (anterior ao virtual) publica `gamepad_incompleto` + `mapa_sem_calibracao`; a do
 QEMU publica `expected: false` e não avisa. 126 testes.
+
+## 7.14 Decisões (26/11/2026, loja e PortMaster)
+
+A loja e o PortMaster entraram no ecossistema: a loja entrega `.giochi`
+assinado em `/user/apps`, e o PortMaster é um **sideload** que baixa `.zip` sem
+assinatura e roda dentro do `bubblewrap`. O pacote dele tem `gptokeyb2` (GPL-2.0)
+e `7zzs` (LGPL-2.1) e por isso **não** pode entrar na raiz assinada; o que a
+imagem leva é o **runtime** (python3 + bubblewrap, 22,9 MiB), opt-in no build do
+sistema.
+
+- **`scripts/lib/portmaster.mjs` confere o runtime na imagem.** Cinco peças:
+  `python3`, `bwrap`, `giochi-ports` (os três com `+x`), `/roms` → `/user`
+  (symlink) e `OS_NAME="Giochi"` no `os-release`. É o mesmo `debugfs` do
+  gamepad, e agora os três (`apps`, `gamepad`, `portmaster`) saem de **uma**
+  extração da partição.
+- **`python3` presente é o sinal do opt-in.** Sem ele a imagem não ligou
+  `GIOCHI_WITH_PORTMASTER` — estado legítimo, registrado como `runtime: false` e
+  **sem aviso**. Transformar escolha de build em alarme é o §12.34 ao contrário:
+  ensina a ignorar alarme.
+- **Ligado e quebrado vira `portmaster_incompleto`.** O pacote instala em
+  `/user` e não roda; no aparelho o sintoma é a GUI do PortMaster não abrir.
+  `missingPaths` (`roms`, `user`, `os_name`) só entra na conta quando o runtime
+  está ligado — numa imagem sem python3 o `/roms` também não existe, e listar os
+  dois como "falta" faria parecer defeito o que é escolha.
+- **O `os-release` é contrato de terceiro.** O PortMaster resolve o nome por
+  `OS_NAME` → `NAME` → `ID`; sem `OS_NAME` o `CFW_NAME` sai `Buildroot` e ele
+  procura `mod_Buildroot.txt`. `temOsName` exige o valor `Giochi`, não o
+  produto: `OS_NAME="Giochi OS"` não serve.
+- **O CI do sistema passou a ligar o runtime nos handhelds.** O `build-device.sh`
+  mantém o opt-in; o `build-linux-arm64.yml` passa
+  `GIOCHI_WITH_PORTMASTER=${{ matrix.device == 'qemu-aarch64' && '0' || '1' }}`.
+  Sem isso a release publicada saía sem python3 e o pacote da loja não rodava —
+  e o `Giochi app` já documentava o runtime "na imagem". O QEMU fica de fora: VM
+  sem GPU não roda port.
+- **`docs/juncao.md` ganhou as quatro rotas** (`image`, `store`, `host`,
+  sideload) e a tabela do runtime. O que a junção **não** vê está escrito lá:
+  o pacote em `/user`, `CONFIG_USER_NS`, `CONFIG_INPUT_UINPUT` e `/dev/uinput`
+  ficam para o `giochi-selftest` no aparelho.
+
+Medido nas imagens locais desta máquina (15/11, anteriores ao PortMaster):
+`inspectPortmaster` devolve `runtime: false` nos dois aparelhos, sem aviso — que
+é exatamente o estado daquelas imagens. 133 testes.

@@ -11,6 +11,7 @@ import { observacoesDe } from "./device-notes.mjs";
 import { humanSize, isFile, sha256File, sizeOf } from "./fs.mjs";
 import { inspectGamepad } from "./gamepad.mjs";
 import { injectIntoCardImage, injectOverlay, withCardRootfs } from "./inject.mjs";
+import { inspectPortmaster } from "./portmaster.mjs";
 import { stripCompression } from "./names.mjs";
 import { decompressCommand, qemuBootConfig, renderQemuCommand } from "./qemu.mjs";
 import { readRootfsApps } from "./rootfs.mjs";
@@ -224,14 +225,17 @@ export async function runPackagePhase({
   let inImage = null;
   let inImageReason = null;
   let imageVerified = false;
-  // Peças do controle virtual, lidas na MESMA extração do índice de apps.
+  // Peças do controle virtual e o runtime do PortMaster, lidos na MESMA
+  // extração do índice de apps.
   let gamepad = null;
+  let portmaster = null;
   // Nome do artefato que foi inspecionado, para a mensagem de aviso.
   const readTarget = card ? card.name : system.rootfs?.name || "a imagem";
   if ((!card && system.rootfs) || (card && !card.compressed)) {
     const read = inspectImage({ card, target: card ? card.path : system.rootfs.path });
     imageVerified = Boolean(read.inspected);
     gamepad = read.gamepad;
+    portmaster = read.portmaster;
     if (read.apps.ok) inImage = read.apps.apps;
     else inImageReason = read.apps.reason;
   }
@@ -339,6 +343,7 @@ export async function runPackagePhase({
       });
       imageVerified = true;
       gamepad = lida.gamepad;
+      portmaster = lida.portmaster;
       embedded = reconcileEmbedded(catalogEmbedded, already.apps);
     } else {
       if (already.ok && already.apps.length > 0 && faltando.length > 0) {
@@ -376,6 +381,7 @@ export async function runPackagePhase({
 
       imageVerified = true;
       gamepad = check.gamepad;
+      portmaster = check.portmaster;
       embedded = reconcileEmbedded(catalogEmbedded, check.apps.apps);
       warnings.push({
         code: "apps_injetados",
@@ -393,6 +399,11 @@ export async function runPackagePhase({
   // que vai ser publicado, não do build que o prometia.
   const avaliacao = avaliarGamepad({ leitura: gamepad, expected: !virtual, artefato: imageName });
   warnings.push(...avaliacao.warnings);
+
+  // O runtime do PortMaster é opt-in (`GIOCHI_WITH_PORTMASTER=1`): a junção
+  // publica o que a imagem tem, e só avisa quando ele está ligado e quebrado.
+  const portmasterAvaliacao = avaliarPortmaster({ leitura: portmaster, artefato: imageName });
+  warnings.push(...portmasterAvaliacao.warnings);
 
   const image = await finalizeArtifact({
     sourcePath: imageTarget,
@@ -476,6 +487,7 @@ export async function runPackagePhase({
     },
     input: {
       virtualGamepad: avaliacao.report,
+      portmaster: portmasterAvaliacao.report,
     },
     notes: boot
       ? [
@@ -521,6 +533,7 @@ function inspectImage({ card, target }) {
   const ler = (ext4Path) => ({
     apps: readRootfsApps(ext4Path),
     gamepad: inspectGamepad(ext4Path),
+    portmaster: inspectPortmaster(ext4Path),
   });
 
   // `inspected` continua vindo do índice de apps: é ele que decide
@@ -546,6 +559,19 @@ function inspectImage({ card, target }) {
         missing: [],
         notExecutable: [],
         map: null,
+      },
+      portmaster: {
+        ok: false,
+        inspected: false,
+        reason: aberta.reason,
+        runtime: null,
+        complete: null,
+        present: [],
+        missing: [],
+        notExecutable: [],
+        roms: null,
+        user: null,
+        osName: null,
       },
     };
   }
@@ -611,6 +637,53 @@ function avaliarGamepad({ leitura, expected, artefato }) {
         `${report.map.uncalibrated.length} de 4 eixo(s) sem min/max no buttons.map da imagem ` +
         `(${report.map.uncalibrated.join(", ")}); sem calibração o daemon repassa o valor cru ` +
         "limitado à faixa canônica — o analógico fica com curso mínimo e a inversão do Y se perde",
+    });
+  }
+
+  return { report, warnings };
+}
+
+/**
+ * Transforma a leitura do runtime do PortMaster em manifesto + avisos.
+ *
+ * Diferente do gamepad, aqui a ausência é legítima: o runtime é opt-in no build
+ * do sistema (`GIOCHI_WITH_PORTMASTER=1`, 22,9 MiB). O que não é legítimo é ele
+ * estar **ligado e quebrado** — o pacote instala em `/user` e o port não roda.
+ *
+ * O pacote em si não entra na imagem (GPL-2.0 `gptokeyb2` + LGPL-2.1 `7zzs`):
+ * quem o instala é a loja, em `/user`, e isso o manifesto não tem como ver.
+ */
+function avaliarPortmaster({ leitura, artefato }) {
+  const naoVerificado = !leitura || !leitura.inspected;
+  const report = {
+    checked: !naoVerificado,
+    runtime: naoVerificado ? null : Boolean(leitura.runtime),
+    complete: naoVerificado ? null : Boolean(leitura.complete),
+    present: naoVerificado ? [] : leitura.present,
+    missing: naoVerificado ? [] : leitura.missing,
+    notExecutable: naoVerificado ? [] : leitura.notExecutable,
+    roms: naoVerificado ? null : leitura.roms,
+    user: naoVerificado ? null : leitura.user,
+    osName: naoVerificado ? null : leitura.osName,
+    // Só o runtime ligado gera caminho faltando; guardar no manifesto deixa o
+    // README dizer o mesmo que o aviso, sem recalcular.
+    missingPaths: naoVerificado ? [] : leitura.missingPaths || [],
+  };
+  const warnings = [];
+
+  if (naoVerificado || !report.runtime) return { report, warnings };
+
+  const faltas = [
+    ...report.missing,
+    ...report.notExecutable.map((id) => `${id} (sem bit de execução)`),
+    ...(leitura.missingPaths || []),
+  ];
+  if (faltas.length > 0) {
+    warnings.push({
+      code: "portmaster_incompleto",
+      message:
+        `${artefato} ligou o runtime do PortMaster mas não o entregou completo: falta ${faltas.join(", ")}. ` +
+        "O pacote instala em /user e não roda — e o sintoma no aparelho é a GUI não abrir, sem erro de build",
     });
   }
 
@@ -737,6 +810,38 @@ function readmeFor(release) {
     ...release.apps.store.map((app) => `  - ${app.id} ${app.version} (${app.license})`),
     "",
   );
+
+  // PortMaster: o runtime, não o pacote. É opt-in no build do sistema, então
+  // "não incluído" é estado normal; "ligado e quebrado" não é.
+  const ports = release.input?.portmaster;
+  if (ports) {
+    if (!ports.checked) {
+      lines.push("PortMaster: runtime não verificado nesta imagem.", "");
+    } else if (!ports.runtime) {
+      lines.push(
+        "PortMaster: runtime NÃO incluído nesta imagem (opt-in no build do sistema).",
+        "  O app de loja instala em /user, mas sem python3 + bubblewrap ele não roda.",
+        "",
+      );
+    } else if (ports.complete) {
+      lines.push(
+        "PortMaster: runtime completo (python3, bubblewrap, giochi-ports, /roms -> /user).",
+        "  O pacote do app vem da loja, em /user; no aparelho: giochi-selftest",
+        "",
+      );
+    } else {
+      const faltas = [
+        ...ports.missing,
+        ...ports.notExecutable.map((id) => `${id} (sem bit de execução)`),
+        ...(ports.missingPaths || []),
+      ];
+      lines.push(
+        `PortMaster: runtime INCOMPLETO — falta ${faltas.join(", ")}.`,
+        "  Instalar o pacote em /user não vai funcionar.",
+        "",
+      );
+    }
+  }
 
   // O controle virtual é o que faz o mesmo jogo responder igual em todo
   // aparelho. O README diz o que a imagem TEM — uma imagem incompleta aqui

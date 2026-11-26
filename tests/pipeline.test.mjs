@@ -6,7 +6,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -27,6 +37,7 @@ import {
   readFromImage,
 } from "../scripts/lib/inject.mjs";
 import { inspectGamepad, lerCalibracaoDoMapa } from "../scripts/lib/gamepad.mjs";
+import { inspectPortmaster, temOsName } from "../scripts/lib/portmaster.mjs";
 import { flattenReleaseAssets, normalizeDeviceDirs } from "../scripts/lib/release-assets.mjs";
 import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
@@ -825,10 +836,14 @@ function binaryAvailable(name) {
 }
 
 /** ext4 de verdade, populado a partir de uma pasta, sem root. */
-function makeExt4(dir, rootContent, { executables = [] } = {}) {
+function makeExt4(dir, rootContent, { executables = [], symlinks = {} } = {}) {
   const source = path.join(dir, "rootdir");
   for (const [relative, content] of Object.entries(rootContent)) {
     write(path.join(source, relative), content);
+  }
+  for (const [relative, target] of Object.entries(symlinks)) {
+    mkdirSync(path.dirname(path.join(source, relative)), { recursive: true });
+    symlinkSync(target, path.join(source, relative));
   }
   // `mkfs.ext4 -d` herda o modo do arquivo de origem: sem o chmod, o serviço
   // entraria no ext4 sem bit de execução. Só o que existe — o teste do mapa
@@ -1198,10 +1213,14 @@ test("fase package injeta quando a imagem traz um catálogo antigo", (t) => {
 
 // ── leitura do ext4 dentro de imagem particionada ────────────
 /** Imagem de cartão mínima: tabela MBR + uma partição ext4 com conteúdo. */
-function makeCardImage(dir, rootContent, { executables = [] } = {}) {
+function makeCardImage(dir, rootContent, { executables = [], symlinks = {} } = {}) {
   const rootdir = path.join(dir, "rootdir");
   for (const [relative, content] of Object.entries(rootContent)) {
     write(path.join(rootdir, relative), content);
+  }
+  for (const [relative, target] of Object.entries(symlinks)) {
+    mkdirSync(path.dirname(path.join(rootdir, relative)), { recursive: true });
+    symlinkSync(target, path.join(rootdir, relative));
   }
   for (const relative of executables) {
     if (existsSync(path.join(rootdir, relative))) chmodSync(path.join(rootdir, relative), 0o755);
@@ -2864,7 +2883,7 @@ const EXECUTAVEIS_DO_GAMEPAD = ["usr/bin/giochi-gamepad", "etc/init.d/S52gamepad
 function makeSystemWithRootfs(
   dir,
   rootContent,
-  { kind = "card", executables = EXECUTAVEIS_DO_GAMEPAD } = {},
+  { kind = "card", executables = EXECUTAVEIS_DO_GAMEPAD, symlinks = {} } = {},
 ) {
   const card = kind === "card";
   const deviceId = card ? "r35s" : "qemu-aarch64";
@@ -2895,12 +2914,12 @@ function makeSystemWithRootfs(
 
   if (card) {
     const imageName = "giochi-system-r35s-sd.img";
-    const cartao = makeCardImage(montagem, rootContent, { executables });
+    const cartao = makeCardImage(montagem, rootContent, { executables, symlinks });
     writeFileSync(path.join(systemDir, imageName), readFileSync(cartao));
     linhas.unshift(`${sha256(readFileSync(path.join(systemDir, imageName)))}  ${imageName}`);
   } else {
     const kernel = Buffer.from("kernel de teste");
-    const rootfs = makeExt4(montagem, rootContent, { executables });
+    const rootfs = makeExt4(montagem, rootContent, { executables, symlinks });
     write(path.join(systemDir, "Image"), kernel);
     writeFileSync(path.join(systemDir, "rootfs.ext4"), readFileSync(rootfs));
     linhas.unshift(`${sha256(readFileSync(path.join(systemDir, "rootfs.ext4")))}  rootfs.ext4`);
@@ -3093,5 +3112,206 @@ test("cartão comprimido na origem não é espiado, e o aviso diz isso", async (
       result.warnings.some((warning) => warning.code === "gamepad_nao_verificado"),
       JSON.stringify(result.warnings),
     );
+  });
+});
+
+// ── PortMaster: o runtime, não o pacote ──────────────────────
+//
+// O pacote (24,6 MB, com GPL-2.0 e LGPL-2.1 dentro) vai para /user pela loja.
+// A imagem pode levar o runtime: python3, bubblewrap, giochi-ports, /roms →
+// /user e OS_NAME no os-release. É opt-in no build do sistema, então a junção
+// publica o que a imagem tem — e avisa só quando está ligado e quebrado.
+
+/** Runtime completo do PortMaster, no formato que o post-build entrega. */
+function conteudoDoPortmaster({ osName = true, pecas = ["python3", "bwrap", "giochi-ports"] } = {}) {
+  const todas = {
+    python3: ["usr/bin/python3", "#!/bin/sh\nexit 0\n"],
+    bwrap: ["usr/bin/bwrap", "#!/bin/sh\nexit 0\n"],
+    "giochi-ports": ["usr/bin/giochi-ports", "#!/bin/sh\nexit 0\n"],
+  };
+  const conteudo = {};
+  for (const id of pecas) {
+    const [caminho, texto] = todas[id];
+    conteudo[caminho] = texto;
+  }
+  conteudo["usr/lib/os-release"] = [
+    'PRETTY_NAME="Giochi OS"',
+    'NAME="Giochi OS"',
+    ...(osName ? ['OS_NAME="Giochi"'] : []),
+    "",
+  ].join("\n");
+  // `/user` é diretório no rootfs: um `.keep` basta para o mkfs criá-lo.
+  conteudo["user/.keep"] = "";
+  return conteudo;
+}
+
+/** Rootfs com o runtime, já com `/roms` → `/user` (o symlink que o port espera). */
+function makeRootfsWithPortmaster(dir, conteudo, { roms = true } = {}) {
+  return makeExt4(dir, conteudo, {
+    executables: ["usr/bin/python3", "usr/bin/bwrap", "usr/bin/giochi-ports"],
+    symlinks: roms ? { roms: "/user" } : {},
+  });
+}
+
+test("inspectPortmaster reconhece o runtime completo", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const image = makeRootfsWithPortmaster(dir, conteudoDoPortmaster());
+    const lido = inspectPortmaster(image);
+
+    assert.equal(lido.inspected, true, lido.reason);
+    assert.equal(lido.runtime, true);
+    assert.equal(lido.complete, true, JSON.stringify(lido));
+    assert.deepEqual(lido.missing, []);
+    assert.equal(lido.roms, "/user", "o symlink é o que faz os ports acharem /roms");
+    assert.equal(lido.user, "directory");
+    assert.equal(lido.osName, "Giochi");
+  });
+});
+
+test("inspectPortmaster distingue 'sem runtime' de 'runtime quebrado'", (t) => {
+  // Sem python3 o build não ligou o opt-in: é estado normal, e a junção não
+  // pode tratar como defeito. Com ele, toda peça que falte é defeito.
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const semRuntime = inspectPortmaster(
+      makeRootfsWithPortmaster(dir, conteudoDoPortmaster({ pecas: ["giochi-ports"] })),
+    );
+    assert.equal(semRuntime.runtime, false);
+    assert.equal(semRuntime.complete, false);
+    assert.deepEqual(semRuntime.missing.sort(), ["bwrap", "python3"]);
+    // `missingPaths` só entra quando o runtime está ligado: numa imagem sem
+    // python3 o /roms também não existe, e não é defeito.
+    assert.deepEqual(semRuntime.missingPaths, []);
+
+    const semSandbox = inspectPortmaster(
+      makeRootfsWithPortmaster(path.join(dir, "b"), conteudoDoPortmaster({ pecas: ["python3", "giochi-ports"] })),
+    );
+    assert.equal(semSandbox.runtime, true);
+    assert.equal(semSandbox.complete, false);
+    assert.deepEqual(semSandbox.missing, ["bwrap"]);
+  });
+});
+
+test("inspectPortmaster exige o symlink, o diretório e o OS_NAME", (t) => {
+  // Sem OS_NAME o PortMaster classifica o CFW como "Buildroot" e procura
+  // mod_Buildroot.txt; sem /roms, 28% dos ports não acham o caminho.
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const semRom = inspectPortmaster(
+      makeRootfsWithPortmaster(path.join(dir, "a"), conteudoDoPortmaster(), { roms: false }),
+    );
+    assert.equal(semRom.runtime, true);
+    assert.equal(semRom.complete, false);
+    assert.deepEqual(semRom.missingPaths, ["roms"]);
+
+    const semOsName = inspectPortmaster(
+      makeRootfsWithPortmaster(path.join(dir, "b"), conteudoDoPortmaster({ osName: false })),
+    );
+    assert.equal(semOsName.complete, false);
+    assert.deepEqual(semOsName.missingPaths, ["os_name"]);
+    assert.equal(semOsName.osName, null);
+  });
+});
+
+test("temOsName aceita a linha exata e recusa Buildroot", () => {
+  assert.equal(temOsName('NAME="Giochi OS"\nOS_NAME="Giochi"\n'), true);
+  assert.equal(temOsName("OS_NAME=Giochi\n"), true);
+  // O os-release do Buildroot puro: o CFW_NAME sai "Buildroot" e o PortMaster
+  // procura um mod que não existe.
+  assert.equal(temOsName('NAME=Buildroot\nID=buildroot\n'), false);
+  assert.equal(temOsName('OS_NAME="Giochi OS"\n'), false, "o valor é o contrato, não o produto");
+});
+
+test("fase package publica o runtime do PortMaster na imagem e no README", (t) => {
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/dd/e2fsck ausentes");
+  return withTempDirAsync(async (dir) => {
+    const systemDir = makeSystemWithRootfs(dir, conteudoDoPortmaster(), {
+      executables: [
+        ...EXECUTAVEIS_DO_GAMEPAD,
+        "usr/bin/python3",
+        "usr/bin/bwrap",
+        "usr/bin/giochi-ports",
+      ],
+      symlinks: { roms: "/user" },
+    });
+    const outDir = path.join(dir, "dist");
+
+    const result = await runPackagePhase({ systemDir, outDir, version: "0.1.0" });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const ports = result.release.input.portmaster;
+    assert.equal(ports.checked, true);
+    assert.equal(ports.runtime, true);
+    assert.equal(ports.complete, true, JSON.stringify(ports));
+    assert.deepEqual(ports.missingPaths, []);
+
+    const readme = readFileSync(path.join(outDir, "README.txt"), "utf8");
+    assert.match(readme, /PortMaster: runtime completo/);
+  });
+});
+
+test("imagem sem o runtime registra o fato e não vira aviso", async () => {
+  // É o caso do build padrão: o opt-in do sistema não foi ligado. A junção não
+  // pode transformar uma escolha de build num aviso em toda release.
+  await withTempDirAsync(async (dir) => {
+    makeSystemOutput(dir, { imageName: "card.img.xz", deviceId: "r35s", deviceName: "R35S" });
+    const result = await runPackagePhase({
+      systemDir: dir,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    const ports = result.release.input.portmaster;
+    assert.equal(ports.checked, false, "comprimido na origem não é espionado");
+    assert.equal(ports.runtime, null);
+    assert.equal(
+      result.warnings.some((warning) => /portmaster/.test(warning.code)),
+      false,
+      JSON.stringify(result.warnings),
+    );
+  });
+});
+
+test("runtime do PortMaster ligado e sem /roms vira aviso e aparece no README", (t) => {
+  // O caso que o build verde esconde: python3 e bwrap na imagem, mas o symlink
+  // que 28% dos ports citam não foi criado. Instalar o pacote em /user
+  // funciona; rodar, não.
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/dd/e2fsck ausentes");
+  return withTempDirAsync(async (dir) => {
+    const systemDir = makeSystemWithRootfs(
+      dir,
+      conteudoDoPortmaster(),
+      {
+        executables: ["usr/bin/python3", "usr/bin/bwrap", "usr/bin/giochi-ports"],
+        symlinks: {},
+      },
+    );
+
+    const result = await runPackagePhase({
+      systemDir,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const ports = result.release.input.portmaster;
+    assert.equal(ports.runtime, true);
+    assert.equal(ports.complete, false);
+    assert.deepEqual(ports.missingPaths, ["roms"]);
+
+    const aviso = result.warnings.find((warning) => warning.code === "portmaster_incompleto");
+    assert.ok(aviso, JSON.stringify(result.warnings));
+    assert.match(aviso.message, /roms/);
+
+    const readme = readFileSync(path.join(dir, "dist", "README.txt"), "utf8");
+    assert.match(readme, /PortMaster: runtime INCOMPLETO — falta roms/);
   });
 });

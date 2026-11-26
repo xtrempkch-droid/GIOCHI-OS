@@ -46,7 +46,15 @@ export function statRootfsPath(rootfsPath, target) {
   // Caminho inexistente: status 0 e "File not found" no stderr.
   const stderr = String(result.stderr || "");
   if (/file not found|not found by/i.test(stderr)) {
-    return { ok: true, inspected: true, exists: false, executable: false, mode: null };
+    return {
+      ok: true,
+      inspected: true,
+      exists: false,
+      executable: false,
+      mode: null,
+      type: null,
+      linkTarget: null,
+    };
   }
   if (result.status !== 0) {
     return {
@@ -56,16 +64,25 @@ export function statRootfsPath(rootfsPath, target) {
     };
   }
 
+  const texto = String(result.stdout || "");
   // `Mode:   0644` / `Mode:  0100755` conforme a versão do e2fsprogs. Os três
   // últimos dígitos são as permissões; o primeiro deles é o do dono.
-  const match = /Mode:\s+0?([0-7]+)/.exec(String(result.stdout || ""));
+  const match = /Mode:\s+0?([0-7]+)/.exec(texto);
   const mode = match ? match[1].slice(-3) : null;
+  // `Type: regular|directory|symlink|…` — é o que separa arquivo de diretório
+  // na verificação do PortMaster (`/user` tem de ser diretório, `/roms` tem de
+  // ser symlink).
+  const tipo = /Type:\s*(\w+)/.exec(texto);
+  // Symlink de destino curto fica no próprio inode: `Fast link dest: "/user"`.
+  const link = /Fast link dest:\s*"([^"]*)"/.exec(texto);
   return {
     ok: true,
     inspected: true,
     exists: true,
     executable: mode ? /[1357]/.test(mode[0]) : false,
     mode,
+    type: tipo ? tipo[1].toLowerCase() : null,
+    linkTarget: link ? link[1] : null,
   };
 }
 
