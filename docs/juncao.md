@@ -18,6 +18,10 @@ fase 2 (package)  → imagem + manifesto + checksum
 Se o empacotamento tentasse inserir apps depois, teria que remontar a imagem
 ext4 e reverter a assinatura — desfazendo justamente o que protege o sistema.
 
+O outro lado do contrato — **o que um app pode esperar do aparelho**, e o que a
+junção confere para isso valer — está em
+[Contrato de entrada](#contrato-de-entrada--o-que-um-app-pode-esperar-do-aparelho).
+
 ## Fase 1 — `apps`
 
 **Entrada:** um ou mais catálogos (ver "Mais de um catálogo" abaixo)
@@ -57,8 +61,97 @@ O que faz:
 4. Copia para `giochi-<device>-<versão>.img` (ou `.img.xz` com `--compress`).
 5. Recalcula o SHA-256 do arquivo copiado (não confia no hash de origem: a cópia
    pode ter falhado).
-6. Lê o que está dentro da imagem, quando dá.
+6. Lê o que está dentro da imagem, quando dá: o índice de apps e as peças do
+   controle virtual (ver "Contrato de entrada" abaixo).
 7. Escreve o manifesto e o `README.txt` com o comando certo para o tipo de alvo.
+
+## Contrato de entrada — o que um app pode esperar do aparelho
+
+A junção compõe sistema e apps, mas o que decide a arquitetura de um app é
+outra pergunta: **o mesmo binário responde igual em todo aparelho?**
+
+Desde 17/11/2026, sim — se ele abrir o controle virtual **`Giochi Gamepad`**. O
+Giochi System publica um nó único com 17 botões e 4 eixos em `-32767..32767`, e
+traduz o hardware de cada placa para ele:
+
+| Aparelho | Como os botões chegam no hardware | `SDL_GameController` no nó físico |
+| --- | --- | --- |
+| R35S | **um** nó: 17 botões + 4 eixos (`rocknix-singleadc-joypad`) | reconhece |
+| X55 / X35H | **dois** nós: `gpio-keys` (botões) + `adc-joystick` (eixos) | **não** — o SDL2 exige `BTN_SOUTH` **e** `ABS_X`/`ABS_Y` no mesmo nó |
+
+Sem o virtual, o mesmo jogo responde com os botões trocados no R35S e certo na
+X55, e cada jogo precisaria de um `if` por console. O caso medido está no
+`AGENTS.md` §12.74 do GIOCHI-SYSTEM; a referência completa do contrato está em
+`docs/contrato-de-entrada.md` daquele repositório.
+
+O que vale para quem integra um app:
+
+- **o device existe em todo aparelho** com o mesmo layout: 17 botões, códigos
+  fixos, 4 eixos em `-32767..32767`, `flat=32` no kernel. A zona morta de
+  **jogabilidade** continua sendo escolha do jogo;
+- **`/etc/giochi/buttons.map` é a fonte da verdade** dos códigos e da
+  calibração. No mapa, `axis_<eixo>_min` **e** `axis_<eixo>_max` calibram o
+  eixo; sem os dois o daemon repassa o valor cru limitado à faixa canônica, e
+  numa faixa 15..1023 isso é curso de 1,5% do analógico;
+- **aparelho novo entra editando o mapa**, sem tocar em app;
+- o kernel precisa de `CONFIG_INPUT_UINPUT=y`: sem ele não existe `/dev/uinput`,
+  e sem `/dev/uinput` não existe o device virtual.
+
+### O que a junção verifica
+
+Ler o catálogo e concluir "a imagem tem o controle" seria chute. A junção abre o
+rootfs **que vai ser publicado** — `debugfs` no `rootfs.ext4` do alvo virtual, e
+a partição extraída com `dd` no cartão — e confere quatro peças:
+
+| Peça | Caminho na imagem | Sem ela |
+| --- | --- | --- |
+| daemon | `/usr/bin/giochi-gamepad` (executável) | não há tradução; cada aparelho fica no layout dele |
+| serviço | `/etc/init.d/S52gamepad` (executável) | o daemon existe e não sobe |
+| mapeamento | `/etc/giochi/gamecontrollerdb.txt` | o `Button::A` do SDL deixa de casar com o `a` do mapa |
+| mapa | `/etc/giochi/buttons.map` | não há código nem calibração a traduzir |
+
+O resultado vai para o `release.json` em `input.virtualGamepad`: o que está
+presente, o que falta, e a calibração dos eixos lida do mapa. Os avisos:
+
+| Situação | Aviso |
+| --- | --- |
+| aparelho de cartão sem uma das peças, ou com ela sem bit de execução | `gamepad_incompleto` |
+| mapa sem `axis_<eixo>_min` **e** `_max` nos 4 eixos | `mapa_sem_calibracao` |
+| imagem comprimida na origem, ou sem `debugfs`/`sfdisk` | `gamepad_nao_verificado` |
+
+Para conferir à mão, com a imagem montada ou o rootfs extraído:
+
+```bash
+test -x /usr/bin/giochi-gamepad          || echo "FALTA o daemon"
+test -x /etc/init.d/S52gamepad           || echo "FALTA o serviço"
+test -f /etc/giochi/gamecontrollerdb.txt || echo "FALTA o mapeamento"
+```
+
+Alvo virtual não entra na conta: `input.virtualGamepad.expected` é `false`, e a
+ausência das peças no QEMU é normal — não há gamepad físico para traduzir. O
+`README.txt` de cada aparelho repete o veredito ("completo", "INCOMPLETO —
+falta …" ou "não se aplica"), porque é ele que quem baixa lê.
+
+Medido nesta máquina com o `assemble`: a imagem local do R35S de 15/11/2026,
+anterior ao virtual, publica `gamepad_incompleto` (falta daemon, serviço e
+mapeamento) **e** `mapa_sem_calibracao` (os 4 eixos sem `min`/`max` — o defeito
+que o Giochi System mediu no aparelho). A imagem do QEMU publica
+`expected: false` e não avisa nada.
+
+### O que a junção não consegue verificar
+
+`CONFIG_INPUT_UINPUT` não vem em `out/<device>/`: a config do kernel não é
+publicada junto do build, e procurar a string no `Image` não é confiável (kernel
+comprimido, ou sem `CONFIG_IKCONFIG`). E `/dev/uinput` só existe depois do boot.
+Essas duas ficam para o aparelho:
+
+```bash
+/etc/init.d/S52gamepad status     # processo + device virtual
+```
+
+Se o daemon não subir, o aparelho volta ao layout dele — e o `giochi-selftest`
+reporta, para não parecer que está tudo bem. O que a junção garante é que a
+imagem **sai** com as peças, e que o manifesto não diz que saiu quando não saiu.
 
 ## Alvo virtual (QEMU)
 
@@ -161,12 +254,28 @@ aquilo mesmo.
     "imageVerified": true,
     "store": [{ "id": "shattered-pixel-dungeon", "version": "3.0.0", "license": "GPL-3.0-only", "embedded": false }]
   },
+  "input": {
+    "virtualGamepad": {
+      "expected": true,
+      "checked": true,
+      "complete": true,
+      "present": ["daemon", "servico", "mapeamento", "mapa"],
+      "missing": [],
+      "notExecutable": [],
+      "map": { "axes": 4, "calibrated": ["x", "y", "rx", "ry"], "uncalibrated": [] }
+    }
+  },
   "generatedAt": "2026-11-13T…",
   "generator": "giochi-os assemble 0.1.0"
 }
 ```
 
 Para imagem de cartão, `kind` é `"card"`, não há `boot` e `kernel` é `null`.
+
+`input` é aditivo no `schemaVersion: 2` — release antiga não tem o bloco, e
+nada além do `README.txt` depende dele. `checked: false` significa "a imagem não
+foi inspecionada" (comprimida na origem, ou sem `debugfs`/`sfdisk`), não "não
+tem".
 
 `apps.store` existe para transparência: o site mostra o que **não** está na
 imagem, então ninguém instala e conclui que o app sumiu.
@@ -188,6 +297,9 @@ como cartão.
 | Imagem ausente | erro na fase 2, aviso na geração do site |
 | Só kernel + rootfs (alvo virtual) | publica disco + kernel, com aviso `sem_cartao` |
 | Overlay de apps fora do build | `overlay_ausente`; manifesto não anuncia app ausente |
+| Controle virtual incompleto na imagem | `gamepad_incompleto`; `input.virtualGamepad` publica o que falta |
+| Mapa sem calibração de eixo | `mapa_sem_calibracao` (aviso; a imagem é publicada) |
+| Imagem comprimida na origem, sem `debugfs`/`sfdisk` | `gamepad_nao_verificado`; `checked: false` |
 | `debugfs`/`xz` ausentes na máquina | aviso; cai para catálogo e `gz` |
 
 ## O que este repositório não faz

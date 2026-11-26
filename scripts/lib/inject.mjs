@@ -491,14 +491,19 @@ export function listPartitions(imagePath) {
 }
 
 /**
- * Lê `/opt/giochi/apps/index.json` de uma imagem com tabela de partição.
+ * Abre o rootfs de uma imagem **com tabela de partição** para quem precisa LER.
  *
- * Extrai a maior partição Linux para um arquivo temporário com `dd` e roda o
- * `debugfs` nela. É leitura, não escrita: nenhuma etapa altera a imagem
- * original. Custa I/O do tamanho do rootfs — e é o preço de dizer a verdade no
- * manifesto em vez de repetir o catálogo.
+ * Extrai a maior partição Linux para um arquivo temporário com `dd`, entrega o
+ * caminho a `ler` e apaga o temporário no fim — inclusive nos caminhos de erro.
+ * Nenhuma etapa altera a imagem original.
+ *
+ * É uma extração por chamada, e por isso o callback existe: ler o índice de
+ * apps e as peças do controle virtual em duas chamadas custaria o I/O do rootfs
+ * duas vezes (~8 s por GiB em disco frio).
+ *
+ * Devolve `{ ok, inspected, result }` ou `{ ok: false, inspected: false, reason }`.
  */
-export function readAppsFromCardImage(imagePath, { tempDir } = {}) {
+export function withCardRootfs(imagePath, ler, { tempDir } = {}) {
   const table = listPartitions(imagePath);
   if (!table) return { ok: false, inspected: false, reason: "tabela de partição ilegível" };
 
@@ -517,9 +522,24 @@ export function readAppsFromCardImage(imagePath, { tempDir } = {}) {
     return { ok: false, inspected: false, reason: extraida.reason };
   }
 
-  const read = readRootfsApps(partitionFile);
-  if (created) rmSync(dir, { recursive: true, force: true });
-  return read;
+  try {
+    return { ok: true, inspected: true, result: ler(partitionFile) };
+  } finally {
+    if (created) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Lê `/opt/giochi/apps/index.json` de uma imagem com tabela de partição.
+ *
+ * É leitura, não escrita: nenhuma etapa altera a imagem original. Custa I/O do
+ * tamanho do rootfs — e é o preço de dizer a verdade no manifesto em vez de
+ * repetir o catálogo.
+ */
+export function readAppsFromCardImage(imagePath, options = {}) {
+  const aberta = withCardRootfs(imagePath, readRootfsApps, options);
+  if (!aberta.ok) return { ok: false, inspected: false, reason: aberta.reason };
+  return aberta.result;
 }
 
 /**

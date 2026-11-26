@@ -1,6 +1,8 @@
 # Documentação — Giochi os
 
-- [Junção](juncao.md) — contrato entre os dois repositórios, as duas fases e o que cada uma verifica.
+- [Junção](juncao.md) — contrato entre os dois repositórios, as duas fases, o
+  contrato de entrada do controle virtual (`Giochi Gamepad`) e o que cada fase
+  verifica.
 - [Site](site.md) — como o site é gerado, por que sem `fetch`, e como publicar.
 
 ## Princípio

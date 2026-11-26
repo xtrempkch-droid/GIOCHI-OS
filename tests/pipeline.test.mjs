@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -26,6 +26,7 @@ import {
   readAppsFromCardImage,
   readFromImage,
 } from "../scripts/lib/inject.mjs";
+import { inspectGamepad, lerCalibracaoDoMapa } from "../scripts/lib/gamepad.mjs";
 import { flattenReleaseAssets, normalizeDeviceDirs } from "../scripts/lib/release-assets.mjs";
 import { readRootfsApps } from "../scripts/lib/rootfs.mjs";
 import { generateSite } from "../scripts/lib/site.mjs";
@@ -824,10 +825,16 @@ function binaryAvailable(name) {
 }
 
 /** ext4 de verdade, populado a partir de uma pasta, sem root. */
-function makeExt4(dir, rootContent) {
+function makeExt4(dir, rootContent, { executables = [] } = {}) {
   const source = path.join(dir, "rootdir");
   for (const [relative, content] of Object.entries(rootContent)) {
     write(path.join(source, relative), content);
+  }
+  // `mkfs.ext4 -d` herda o modo do arquivo de origem: sem o chmod, o serviço
+  // entraria no ext4 sem bit de execução. Só o que existe — o teste do mapa
+  // vale tanto com as quatro peças quanto sem nenhuma.
+  for (const relative of executables) {
+    if (existsSync(path.join(source, relative))) chmodSync(path.join(source, relative), 0o755);
   }
   const image = path.join(dir, "rootfs.ext4");
   const result = spawnSync(
@@ -1191,10 +1198,13 @@ test("fase package injeta quando a imagem traz um catálogo antigo", (t) => {
 
 // ── leitura do ext4 dentro de imagem particionada ────────────
 /** Imagem de cartão mínima: tabela MBR + uma partição ext4 com conteúdo. */
-function makeCardImage(dir, rootContent) {
+function makeCardImage(dir, rootContent, { executables = [] } = {}) {
   const rootdir = path.join(dir, "rootdir");
   for (const [relative, content] of Object.entries(rootContent)) {
     write(path.join(rootdir, relative), content);
+  }
+  for (const relative of executables) {
+    if (existsSync(path.join(rootdir, relative))) chmodSync(path.join(rootdir, relative), 0o755);
   }
   const partition = path.join(dir, "particao.img");
   assert.equal(
@@ -2798,4 +2808,290 @@ test("o link de doação abre em aba nova com rel seguro", () => {
     assert.ok(bloco.includes('target="_blank"'), `${link}: sem target`);
     assert.match(bloco, /rel="noopener noreferrer"/, `${link}: sem rel seguro`);
   }
+});
+
+// ── controle virtual na imagem ───────────────────────────────
+//
+// O `Giochi Gamepad` é contrato de ENTRADA: sem as peças, o aparelho continua
+// bootando e os jogos abrem — cada um no layout daquele aparelho, sem erro em
+// lugar nenhum. Por isso a junção lê as peças de dentro da imagem que vai ser
+// publicada, e o manifesto diz o que ela tem.
+
+/** Mapa calibrado, no formato medido nos aparelhos (`axis_<eixo>_min/max`). */
+const MAPA_CALIBRADO = [
+  "a = BTN_EAST",
+  "b = BTN_SOUTH",
+  "axis_x_min = 15",
+  "axis_x_max = 1023",
+  "axis_y_min = 1023",
+  "axis_y_max = 15",
+  "axis_rx_min = 15",
+  "axis_rx_max = 1023",
+  "axis_ry_min = 1023",
+  "axis_ry_max = 15",
+  "",
+].join("\n");
+
+/** As quatro peças do contrato, prontas para entrar num ext4. */
+function conteudoDoGamepad({ mapa = MAPA_CALIBRADO, pecas = ["daemon", "servico", "mapeamento", "mapa"] } = {}) {
+  const todas = {
+    daemon: ["usr/bin/giochi-gamepad", "#!/bin/sh\nexit 0\n"],
+    servico: ["etc/init.d/S52gamepad", "#!/bin/sh\nexit 0\n"],
+    mapeamento: [
+      "etc/giochi/gamecontrollerdb.txt",
+      "030000005e0400000000000000000000,Giochi Gamepad,a:b1,b:b0,\n",
+    ],
+    mapa: ["etc/giochi/buttons.map", mapa],
+  };
+  const conteudo = {};
+  for (const id of pecas) {
+    const [caminho, texto] = todas[id];
+    conteudo[caminho] = texto;
+  }
+  return conteudo;
+}
+
+/** O que o build marca como executável: daemon e serviço. */
+const EXECUTAVEIS_DO_GAMEPAD = ["usr/bin/giochi-gamepad", "etc/init.d/S52gamepad"];
+
+/**
+ * Pasta `out/<device>/` com rootfs ext4 de verdade.
+ *
+ * `card` = MBR + partição, como o `make-sd-image.sh` entrega; `virtual` =
+ * `Image` + `rootfs.ext4`, como o QEMU. O resto dos metadados é o mínimo que a
+ * fase `package` exige.
+ */
+function makeSystemWithRootfs(
+  dir,
+  rootContent,
+  { kind = "card", executables = EXECUTAVEIS_DO_GAMEPAD } = {},
+) {
+  const card = kind === "card";
+  const deviceId = card ? "r35s" : "qemu-aarch64";
+  const systemDir = path.join(dir, "out", deviceId);
+  mkdirSync(systemDir, { recursive: true });
+
+  write(
+    path.join(systemDir, "device.json"),
+    JSON.stringify(
+      card
+        ? { id: "r35s", name: "R35S", arch: "arm64", buildroot: "2024.02" }
+        : {
+            id: "qemu-aarch64",
+            name: "QEMU AArch64 Virt",
+            arch: "arm64",
+            buildroot: "2024.02",
+            buildrootDefconfig: "qemu_aarch64_virt_defconfig",
+          },
+    ),
+  );
+  write(path.join(systemDir, "build-info.txt"), "name=Giochi System\nbuildroot=2024.02\n");
+
+  const montagem = path.join(dir, `montagem-${kind}`);
+  const linhas = [
+    `${sha256(readFileSync(path.join(systemDir, "device.json")))}  device.json`,
+    `${sha256(readFileSync(path.join(systemDir, "build-info.txt")))}  build-info.txt`,
+  ];
+
+  if (card) {
+    const imageName = "giochi-system-r35s-sd.img";
+    const cartao = makeCardImage(montagem, rootContent, { executables });
+    writeFileSync(path.join(systemDir, imageName), readFileSync(cartao));
+    linhas.unshift(`${sha256(readFileSync(path.join(systemDir, imageName)))}  ${imageName}`);
+  } else {
+    const kernel = Buffer.from("kernel de teste");
+    const rootfs = makeExt4(montagem, rootContent, { executables });
+    write(path.join(systemDir, "Image"), kernel);
+    writeFileSync(path.join(systemDir, "rootfs.ext4"), readFileSync(rootfs));
+    linhas.unshift(`${sha256(readFileSync(path.join(systemDir, "rootfs.ext4")))}  rootfs.ext4`);
+    linhas.unshift(`${sha256(kernel)}  Image`);
+  }
+
+  write(path.join(systemDir, "SHA256SUMS"), `${linhas.join("\n")}\n`);
+  return systemDir;
+}
+
+test("lerCalibracaoDoMapa exige os dois lados de cada eixo", () => {
+  const completo = lerCalibracaoDoMapa(MAPA_CALIBRADO);
+  assert.deepEqual(completo.calibrated, ["x", "y", "rx", "ry"]);
+  assert.deepEqual(completo.uncalibrated, []);
+  assert.equal(completo.axes, 4);
+
+  // Um lado só não calibra: o daemon exige `min` E `max` (bits 1 e 2).
+  const meio = lerCalibracaoDoMapa("axis_x_min = 0\naxis_x_max = 100\naxis_y_min = 0\n");
+  assert.deepEqual(meio.calibrated, ["x"]);
+  assert.deepEqual(meio.uncalibrated, ["y", "rx", "ry"]);
+
+  // Comentário não calibra nada — e é o caso real do R35S até 17/11/2026,
+  // cujo mapa documentava a medição em comentário e não em `axis_*`.
+  const comentado = lerCalibracaoDoMapa(
+    "# axis_x_min = -1800\n# axis_x_max = 1800\na = BTN_EAST\n",
+  );
+  assert.equal(comentado.axes, 0);
+  assert.deepEqual(comentado.uncalibrated, ["x", "y", "rx", "ry"]);
+});
+
+test("inspectGamepad encontra as peças e a calibração no ext4", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const image = makeExt4(dir, conteudoDoGamepad(), { executables: EXECUTAVEIS_DO_GAMEPAD });
+    const lido = inspectGamepad(image);
+
+    assert.equal(lido.inspected, true, lido.reason);
+    assert.equal(lido.complete, true);
+    assert.deepEqual(lido.missing, []);
+    assert.deepEqual(lido.notExecutable, []);
+    assert.deepEqual(lido.present.sort(), ["daemon", "mapa", "mapeamento", "servico"]);
+    assert.deepEqual(lido.map.calibrated, ["x", "y", "rx", "ry"]);
+  });
+});
+
+test("inspectGamepad acusa peça ausente e peça sem bit de execução", (t) => {
+  // Arquivo presente sem bit de execução não sobe, e o sintoma é o mesmo do
+  // arquivo ausente — por isso os dois entram no veredito.
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  withTempDir((dir) => {
+    const image = makeExt4(
+      dir,
+      conteudoDoGamepad({ pecas: ["servico", "mapa"] }),
+      { executables: [] },
+    );
+    const lido = inspectGamepad(image);
+
+    assert.equal(lido.complete, false);
+    assert.deepEqual(lido.missing.sort(), ["daemon", "mapeamento"]);
+    assert.deepEqual(lido.notExecutable, ["servico"]);
+    assert.deepEqual(lido.present.sort(), ["mapa", "servico"]);
+  });
+});
+
+test("fase package publica a verdade quando o cartão sai sem o controle virtual", (t) => {
+  // O defeito que isto pega: a imagem boota, os jogos abrem e cada um responde
+  // no layout do aparelho — sem erro em lugar nenhum.
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/dd/e2fsck ausentes");
+  return withTempDirAsync(async (dir) => {
+    const systemDir = makeSystemWithRootfs(dir, {
+      "etc/giochi/buttons.map": MAPA_CALIBRADO,
+      "etc/motd": "oi\n",
+    });
+    const outDir = path.join(dir, "dist");
+
+    const result = await runPackagePhase({ systemDir, outDir, version: "0.1.0" });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const gamepad = result.release.input.virtualGamepad;
+    assert.equal(gamepad.expected, true);
+    assert.equal(gamepad.checked, true);
+    assert.equal(gamepad.complete, false);
+    assert.deepEqual(gamepad.missing.sort(), ["daemon", "mapeamento", "servico"]);
+    assert.ok(
+      result.warnings.some((warning) => warning.code === "gamepad_incompleto"),
+      JSON.stringify(result.warnings),
+    );
+
+    const readme = readFileSync(path.join(outDir, "README.txt"), "utf8");
+    assert.match(readme, /Controle virtual: INCOMPLETO/);
+    assert.match(readme, /falta daemon, servico, mapeamento/);
+  });
+});
+
+test("fase package não avisa quando o cartão traz o controle completo", (t) => {
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/dd/e2fsck ausentes");
+  return withTempDirAsync(async (dir) => {
+    const systemDir = makeSystemWithRootfs(dir, conteudoDoGamepad());
+    const outDir = path.join(dir, "dist");
+
+    const result = await runPackagePhase({ systemDir, outDir, version: "0.1.0" });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const gamepad = result.release.input.virtualGamepad;
+    assert.equal(gamepad.complete, true);
+    assert.deepEqual(gamepad.missing, []);
+    assert.equal(
+      result.warnings.some((warning) => /^gamepad_|^mapa_/.test(warning.code)),
+      false,
+      JSON.stringify(result.warnings),
+    );
+
+    const readme = readFileSync(path.join(outDir, "README.txt"), "utf8");
+    assert.match(readme, /Controle virtual: completo/);
+    assert.match(readme, /\/etc\/init\.d\/S52gamepad status/);
+  });
+});
+
+test("fase package avisa mapa sem calibração mesmo com as peças presentes", (t) => {
+  // Mapa sem `axis_*` = calibração implícita errada: o daemon passa o valor
+  // cru, e o analógico fica com curso mínimo (foi o estado do R35S até
+  // 17/11/2026).
+  if (!CARTAO_OK()) return t.skip("mkfs.ext4/debugfs/sfdisk/dd/e2fsck ausentes");
+  return withTempDirAsync(async (dir) => {
+    const systemDir = makeSystemWithRootfs(dir, conteudoDoGamepad({ mapa: "a = BTN_EAST\n" }));
+    const result = await runPackagePhase({
+      systemDir,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.release.input.virtualGamepad.complete, true);
+    assert.deepEqual(
+      result.release.input.virtualGamepad.map.uncalibrated,
+      ["x", "y", "rx", "ry"],
+    );
+    assert.ok(
+      result.warnings.some((warning) => warning.code === "mapa_sem_calibracao"),
+      JSON.stringify(result.warnings),
+    );
+  });
+});
+
+test("alvo virtual não exige o controle e não avisa a ausência", (t) => {
+  if (!binaryAvailable("mkfs.ext4") || !binaryAvailable("debugfs")) {
+    return t.skip("mkfs.ext4/debugfs ausentes");
+  }
+  return withTempDirAsync(async (dir) => {
+    const systemDir = makeSystemWithRootfs(dir, { "etc/motd": "vm\n" }, { kind: "virtual" });
+    const outDir = path.join(dir, "dist");
+
+    const result = await runPackagePhase({ systemDir, outDir, version: "0.1.0" });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+
+    const gamepad = result.release.input.virtualGamepad;
+    assert.equal(gamepad.expected, false, "VM não tem gamepad físico");
+    assert.equal(gamepad.checked, true);
+    assert.equal(gamepad.complete, false);
+    assert.equal(
+      result.warnings.some((warning) => /^gamepad_|^mapa_/.test(warning.code)),
+      false,
+      JSON.stringify(result.warnings),
+    );
+
+    const readme = readFileSync(path.join(outDir, "README.txt"), "utf8");
+    assert.match(readme, /Controle virtual: não se aplica/);
+  });
+});
+
+test("cartão comprimido na origem não é espiado, e o aviso diz isso", async () => {
+  await withTempDirAsync(async (dir) => {
+    makeSystemOutput(dir, { imageName: "card.img.xz", deviceId: "r35s", deviceName: "R35S" });
+    const result = await runPackagePhase({
+      systemDir: dir,
+      outDir: path.join(dir, "dist"),
+      version: "0.1.0",
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    const gamepad = result.release.input.virtualGamepad;
+    assert.equal(gamepad.expected, true);
+    assert.equal(gamepad.checked, false);
+    assert.equal(gamepad.complete, null);
+    assert.ok(
+      result.warnings.some((warning) => warning.code === "gamepad_nao_verificado"),
+      JSON.stringify(result.warnings),
+    );
+  });
 });

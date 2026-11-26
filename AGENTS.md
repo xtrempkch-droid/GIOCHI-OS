@@ -37,10 +37,10 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
 - `scripts/build-site.mjs` gerando site autocontido, e
   `scripts/flatten-release.mjs` desdobrando os anexos de vários aparelhos.
 - `scripts/lib/` com os módulos `fs`, `system`, `apps`, `pipeline`, `site`,
-  `compress`, `rootfs`, `inject`, `qemu`, `names` e `release-assets`.
+  `compress`, `rootfs`, `inject`, `gamepad`, `qemu`, `names` e `release-assets`.
 - `site/template.html` + `site/assets/style.css`, com card próprio para alvo
   virtual (bloco "Como iniciar no QEMU" e download do kernel).
-- 79 testes em `tests/pipeline.test.mjs`.
+- 126 testes em `tests/pipeline.test.mjs`.
 - Workflows: `validate.yml` (testes) e `release.yml` (`discover` → `package`
   matriz → `publish` → `deploy`).
 - Documentação em `docs/` (3 páginas).
@@ -98,6 +98,7 @@ Giochi os/
 │       ├── site.mjs           # geração do HTML
 │       ├── compress.mjs       # xz/zstd com queda para gzip
 │       ├── rootfs.mjs         # lê apps de dentro do ext4 (debugfs)
+│       ├── gamepad.mjs        # as 4 peças do controle virtual na imagem
 │       ├── inject.mjs         # escreve overlay no ext4 sem montar
 │       ├── qemu.mjs           # comando de boot do alvo virtual
 │       ├── release-assets.mjs # layout + nomes dos anexos da release
@@ -731,3 +732,43 @@ teste ou cobrir os custos do projeto, com três formas:
   pedindo atenção, e a nota diz que nada no sistema muda por causa de uma
   doação. Fica depois de licenças, no fim: quem chegou até ali já sabe se o
   sistema serve.
+
+## 7.13 Decisões (26/11/2026, o controle virtual é verificado)
+
+O GIOCHI-SYSTEM passou a publicar o controle virtual `Giochi Gamepad` (17
+botões, 4 eixos em -32767..32767, num nó só) e o pedido (`GIOCHI-OS#5`) foi:
+documentar o contrato na junção **e** garantir que a imagem o carrega — porque o
+defeito é silencioso: sem as peças o aparelho boota, os jogos abrem, e cada um
+responde no layout daquele aparelho, sem erro em lugar nenhum.
+
+- **A leitura é do arquivo publicado, não do build.** `scripts/lib/gamepad.mjs`
+  confere as quatro peças (`/usr/bin/giochi-gamepad`, `/etc/init.d/S52gamepad`,
+  `/etc/giochi/gamecontrollerdb.txt`, `/etc/giochi/buttons.map`) com `debugfs`,
+  no `rootfs.ext4` do alvo virtual e na partição extraída do cartão. É a mesma
+  porta do `apps.imageVerified`, pela mesma razão: o build pode ter prometido o
+  que não entrou.
+- **O bit de execução conta.** Arquivo presente sem `+x` não sobe, e o sintoma é
+  idêntico ao do arquivo ausente — por isso `notExecutable` existe e entra no
+  veredito (`complete`).
+- **`expected` é política, `complete` é fato.** Alvo virtual não tem gamepad
+  físico: `input.virtualGamepad.expected = false`, e a ausência das peças no
+  QEMU não vira aviso. Em cartão, falta de peça é `gamepad_incompleto`.
+- **Mapa sem `axis_*` vira aviso.** `mapa_sem_calibracao`: o daemon exige `min`
+  **e** `max` por eixo; sem os dois ele repassa o valor cru limitado à faixa
+  canônica, e numa faixa 15..1023 isso é curso de 1,5% do analógico. Foi o
+  estado do R35S até 17/11/2026 — zero linhas `axis_*`, com a medição só em
+  comentário.
+- **`CONFIG_INPUT_UINPUT` não é verificável daqui.** A config do kernel não vem
+  em `out/<device>/` e `/dev/uinput` só existe no boot; isso fica para
+  `/etc/init.d/S52gamepad status` e o `giochi-selftest` no aparelho. O
+  `docs/juncao.md` diz o que a junção garante e o que **não** garante, em vez de
+  fingir cobertura.
+- **A extração do cartão é uma só.** `withCardRootfs` entrega a partição
+  extraída a um callback; ler apps e gamepad em duas chamadas pagaria o `dd` de
+  1 GiB duas vezes (~8 s cada).
+- **O README do aparelho diz o veredito.** Quem baixa lê o `README.txt`, não o
+  `release.json`: "completo", "INCOMPLETO — falta …" ou "não se aplica".
+
+Medido com o `assemble` nesta máquina: a imagem local do R35S de 15/11/2026
+(anterior ao virtual) publica `gamepad_incompleto` + `mapa_sem_calibracao`; a do
+QEMU publica `expected: false` e não avisa. 126 testes.

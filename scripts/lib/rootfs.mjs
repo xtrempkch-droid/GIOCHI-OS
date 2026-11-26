@@ -22,6 +22,53 @@ export function debugfsAvailable() {
  * olhou e o índice não está lá, a ausência é uma resposta (build sem overlay),
  * não um "não consegui verificar".
  */
+/**
+ * `stat` de um caminho dentro do ext4: existe? é executável?
+ *
+ * Serve à verificação do controle virtual (`gamepad.mjs`), que precisa saber
+ * não só se o arquivo está lá, mas se o bit de execução veio junto: um
+ * `S52gamepad` não executável não sobe, e o aparelho volta ao layout dele sem
+ * erro nenhum.
+ *
+ * `inspected: false` significa "não consegui olhar" (sem `debugfs`, ext4
+ * ilegível) — que é diferente de `exists: false`.
+ */
+export function statRootfsPath(rootfsPath, target) {
+  if (!debugfsAvailable()) {
+    return { ok: false, inspected: false, reason: "debugfs não disponível" };
+  }
+
+  const result = spawnSync("debugfs", ["-R", `stat ${target}`, rootfsPath], {
+    encoding: "utf8",
+  });
+  if (result.error) return { ok: false, inspected: false, reason: result.error.message };
+
+  // Caminho inexistente: status 0 e "File not found" no stderr.
+  const stderr = String(result.stderr || "");
+  if (/file not found|not found by/i.test(stderr)) {
+    return { ok: true, inspected: true, exists: false, executable: false, mode: null };
+  }
+  if (result.status !== 0) {
+    return {
+      ok: false,
+      inspected: false,
+      reason: (stderr || `exit ${result.status}`).trim().split("\n")[0],
+    };
+  }
+
+  // `Mode:   0644` / `Mode:  0100755` conforme a versão do e2fsprogs. Os três
+  // últimos dígitos são as permissões; o primeiro deles é o do dono.
+  const match = /Mode:\s+0?([0-7]+)/.exec(String(result.stdout || ""));
+  const mode = match ? match[1].slice(-3) : null;
+  return {
+    ok: true,
+    inspected: true,
+    exists: true,
+    executable: mode ? /[1357]/.test(mode[0]) : false,
+    mode,
+  };
+}
+
 export function readRootfsApps(rootfsPath) {
   if (!debugfsAvailable()) {
     return { ok: false, inspected: false, reason: "debugfs não disponível" };

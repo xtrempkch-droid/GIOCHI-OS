@@ -9,11 +9,8 @@ import { loadAppsFromRoots } from "./apps.mjs";
 import { compressFile } from "./compress.mjs";
 import { observacoesDe } from "./device-notes.mjs";
 import { humanSize, isFile, sha256File, sizeOf } from "./fs.mjs";
-import {
-  injectIntoCardImage,
-  injectOverlay,
-  readAppsFromCardImage,
-} from "./inject.mjs";
+import { inspectGamepad } from "./gamepad.mjs";
+import { injectIntoCardImage, injectOverlay, withCardRootfs } from "./inject.mjs";
 import { stripCompression } from "./names.mjs";
 import { decompressCommand, qemuBootConfig, renderQemuCommand } from "./qemu.mjs";
 import { readRootfsApps } from "./rootfs.mjs";
@@ -222,26 +219,21 @@ export async function runPackagePhase({
   const releaseVersion = String(version || readBuildrootVersion(systemDir) || "dev");
 
   // O que está na imagem, lido de dentro dela. Só é possível no alvo virtual,
-  // onde o rootfs é um arquivo solto; num `.img` de cartão o ext4 fica atrás da
-  // tabela de partição e não há como abrir sem montar.
+  // onde o rootfs é um arquivo solto, e no cartão cru, cuja partição ext4 é
+  // extraída. Comprimido na origem não dá para espiar sem descomprimir 2 GiB.
   let inImage = null;
   let inImageReason = null;
   let imageVerified = false;
+  // Peças do controle virtual, lidas na MESMA extração do índice de apps.
+  let gamepad = null;
   // Nome do artefato que foi inspecionado, para a mensagem de aviso.
   const readTarget = card ? card.name : system.rootfs?.name || "a imagem";
-  if (!card && system.rootfs) {
-    const read = readRootfsApps(system.rootfs.path);
+  if ((!card && system.rootfs) || (card && !card.compressed)) {
+    const read = inspectImage({ card, target: card ? card.path : system.rootfs.path });
     imageVerified = Boolean(read.inspected);
-    if (read.ok) inImage = read.apps;
-    else inImageReason = read.reason;
-  } else if (card && !card.compressed) {
-    // Cartão: o ext4 está atrás da tabela de partição, então o debugfs não abre
-    // direto. A partição é extraída e conferida — 8 s num rootfs de 1 GiB, e o
-    // preço de não anunciar app que a imagem não tem.
-    const read = readAppsFromCardImage(card.path);
-    imageVerified = Boolean(read.inspected);
-    if (read.ok) inImage = read.apps;
-    else inImageReason = read.reason;
+    gamepad = read.gamepad;
+    if (read.apps.ok) inImage = read.apps.apps;
+    else inImageReason = read.apps.reason;
   }
 
   const catalogEmbedded = apps.embedded.map((app) => ({
@@ -305,7 +297,9 @@ export async function runPackagePhase({
   //   imagem de cartão (partição)  extrai a partição, altera, confere com
   //                                `e2fsck` e devolve ao offset
   if (injectApps && roots.length > 0) {
-    const lerApps = () => (card ? readAppsFromCardImage(imageTarget) : readRootfsApps(imageTarget));
+    // Lê o índice e as peças do gamepad de uma vez: no cartão cada leitura
+    // extrai a partição inteira, e são dois `debugfs` sobre o mesmo rootfs.
+    const lerImagem = () => inspectImage({ card, target: imageTarget });
     const escrever = (overlayDir) =>
       card
         ? injectIntoCardImage({ imagePath: imageTarget, overlayDir })
@@ -324,7 +318,8 @@ export async function runPackagePhase({
       return { ok: false, errors, warnings, release: null };
     }
 
-    const already = lerApps();
+    const lida = lerImagem();
+    const already = lida.apps;
     // Um app presente na imagem NÃO prova que a imagem está completa: ela pode
     // ter sido construída com um overlay antigo. Medido no QEMU — o rootfs
     // trazia 2 apps de um build anterior e a injeção foi pulada, deixando os 4
@@ -343,6 +338,7 @@ export async function runPackagePhase({
         message: `${imageName} já traz os ${already.apps.length} app(s) do catálogo; a injeção não é necessária`,
       });
       imageVerified = true;
+      gamepad = lida.gamepad;
       embedded = reconcileEmbedded(catalogEmbedded, already.apps);
     } else {
       if (already.ok && already.apps.length > 0 && faltando.length > 0) {
@@ -372,14 +368,15 @@ export async function runPackagePhase({
 
       // Relê pela porta de quem vai USAR a imagem: no cartão isso é a partição
       // extraída, não o arquivo de 2 GiB.
-      const check = lerApps();
-      if (!check.ok) {
-        errors.push({ code: "injecao_nao_verificou", message: check.reason });
+      const check = lerImagem();
+      if (!check.apps.ok) {
+        errors.push({ code: "injecao_nao_verificou", message: check.apps.reason });
         return { ok: false, errors, warnings, release: null };
       }
 
       imageVerified = true;
-      embedded = reconcileEmbedded(catalogEmbedded, check.apps);
+      gamepad = check.gamepad;
+      embedded = reconcileEmbedded(catalogEmbedded, check.apps.apps);
       warnings.push({
         code: "apps_injetados",
         message:
@@ -389,6 +386,13 @@ export async function runPackagePhase({
       });
     }
   }
+
+  // O controle virtual é contrato de ENTRADA: existe em todo aparelho, e sem as
+  // peças o aparelho continua bootando e os jogos abrem — cada um no layout
+  // daquele aparelho, sem erro em lugar nenhum. A leitura acima é do artefato
+  // que vai ser publicado, não do build que o prometia.
+  const avaliacao = avaliarGamepad({ leitura: gamepad, expected: !virtual, artefato: imageName });
+  warnings.push(...avaliacao.warnings);
 
   const image = await finalizeArtifact({
     sourcePath: imageTarget,
@@ -470,6 +474,9 @@ export async function runPackagePhase({
         embedded: false,
       })),
     },
+    input: {
+      virtualGamepad: avaliacao.report,
+    },
     notes: boot
       ? [
           "Esta é uma imagem de máquina virtual: ela não vai para cartão SD.",
@@ -499,6 +506,115 @@ export async function runPackagePhase({
     image: path.join(outDir, release.system.image),
     kernel: release.system.kernel ? path.join(outDir, release.system.kernel.name) : null,
   };
+}
+
+/**
+ * Lê, de dentro da imagem, o índice de apps e as peças do controle virtual.
+ *
+ * Uma extração por imagem quando ela tem tabela de partição: no cartão o custo
+ * é o `dd` da partição inteira, e olhar dois caminhos em duas chamadas pagaria
+ * esse I/O duas vezes.
+ *
+ * `inspected: false` é "não consegui olhar" — diferente de "não tem".
+ */
+function inspectImage({ card, target }) {
+  const ler = (ext4Path) => ({
+    apps: readRootfsApps(ext4Path),
+    gamepad: inspectGamepad(ext4Path),
+  });
+
+  // `inspected` continua vindo do índice de apps: é ele que decide
+  // `apps.imageVerified`, e sem `debugfs` os dois lados devolvem
+  // `inspected: false` — dizer `true` aqui faria a release anunciar
+  // verificação que não houve.
+  if (!card) {
+    const lido = ler(target);
+    return { inspected: Boolean(lido.apps.inspected), ...lido };
+  }
+
+  const aberta = withCardRootfs(target, ler);
+  if (!aberta.ok) {
+    return {
+      inspected: false,
+      apps: { ok: false, inspected: false, reason: aberta.reason },
+      gamepad: {
+        ok: false,
+        inspected: false,
+        reason: aberta.reason,
+        complete: null,
+        present: [],
+        missing: [],
+        notExecutable: [],
+        map: null,
+      },
+    };
+  }
+  return {
+    inspected: Boolean(aberta.result.apps.inspected),
+    ...aberta.result,
+  };
+}
+
+/**
+ * Transforma a leitura do controle virtual em manifesto + avisos.
+ *
+ * `expected` é política, não fato: alvo virtual não tem gamepad físico, então
+ * a ausência das peças lá é normal. Em aparelho de cartão, não ter o controle é
+ * justamente o defeito silencioso que o contrato existe para evitar.
+ */
+function avaliarGamepad({ leitura, expected, artefato }) {
+  const naoVerificado = !leitura || !leitura.inspected;
+  const report = {
+    expected,
+    checked: !naoVerificado,
+    complete: naoVerificado ? null : Boolean(leitura.complete),
+    present: naoVerificado ? [] : leitura.present,
+    missing: naoVerificado ? [] : leitura.missing,
+    notExecutable: naoVerificado ? [] : leitura.notExecutable,
+    map: naoVerificado ? null : leitura.map,
+  };
+  const warnings = [];
+
+  if (naoVerificado) {
+    if (expected) {
+      warnings.push({
+        code: "gamepad_nao_verificado",
+        message:
+          `${artefato} não pôde ser inspecionada (${leitura?.reason || "imagem comprimida na origem"}); ` +
+          "não dá para afirmar que o controle virtual 'Giochi Gamepad' está na imagem",
+      });
+    }
+    return { report, warnings };
+  }
+
+  if (expected && !report.complete) {
+    const faltas = [
+      ...report.missing,
+      ...report.notExecutable.map((id) => `${id} (sem bit de execução)`),
+    ];
+    warnings.push({
+      code: "gamepad_incompleto",
+      message:
+        `${artefato} não traz o controle virtual 'Giochi Gamepad': falta ${faltas.join(", ")}. ` +
+        "O aparelho continua bootando e os jogos abrem, mas cada um responde no layout " +
+        "deste aparelho — sem erro em lugar nenhum (GIOCHI-SYSTEM, AGENTS.md §12.74)",
+    });
+  }
+
+  // Mapa sem calibração é o defeito do R35S até 17/11/2026: zero linhas
+  // `axis_*`. O daemon não falha — ele repassa o valor cru limitado à faixa
+  // canônica, e o analógico fica com quase nenhum curso.
+  if (report.map && report.map.uncalibrated.length > 0) {
+    warnings.push({
+      code: "mapa_sem_calibracao",
+      message:
+        `${report.map.uncalibrated.length} de 4 eixo(s) sem min/max no buttons.map da imagem ` +
+        `(${report.map.uncalibrated.join(", ")}); sem calibração o daemon repassa o valor cru ` +
+        "limitado à faixa canônica — o analógico fica com curso mínimo e a inversão do Y se perde",
+    });
+  }
+
+  return { report, warnings };
 }
 
 /**
@@ -621,6 +737,34 @@ function readmeFor(release) {
     ...release.apps.store.map((app) => `  - ${app.id} ${app.version} (${app.license})`),
     "",
   );
+
+  // O controle virtual é o que faz o mesmo jogo responder igual em todo
+  // aparelho. O README diz o que a imagem TEM — uma imagem incompleta aqui
+  // continua bootando e abrindo jogo, e o sintoma só aparece no botão errado.
+  const gamepad = release.input?.virtualGamepad;
+  if (gamepad) {
+    if (!gamepad.checked) {
+      lines.push("Controle virtual: não verificado nesta imagem.", "");
+    } else if (!gamepad.expected) {
+      lines.push("Controle virtual: não se aplica (máquina virtual, sem gamepad físico).", "");
+    } else if (gamepad.complete) {
+      lines.push(
+        "Controle virtual: completo (daemon, serviço, mapeamento e mapa na imagem).",
+        "  no aparelho: /etc/init.d/S52gamepad status",
+        "",
+      );
+    } else {
+      const faltas = [
+        ...gamepad.missing,
+        ...gamepad.notExecutable.map((id) => `${id} (sem bit de execução)`),
+      ];
+      lines.push(
+        `Controle virtual: INCOMPLETO — falta ${faltas.join(", ")}.`,
+        "  Sem ele os jogos abrem, mas respondem no layout deste aparelho, sem erro na tela.",
+        "",
+      );
+    }
+  }
 
   return lines.join("\n");
 }

@@ -101,6 +101,16 @@ solto, o `debugfs` lê `/opt/giochi/apps/index.json` de dentro dele. Se o overla
 da fase 1 ficou de fora do build, a release avisa `overlay_ausente` e **não**
 anuncia os apps do catálogo como embutidos.
 
+**O controle virtual também é verificado.** O `Giochi Gamepad` é o que faz o
+mesmo jogo responder igual em todo aparelho; sem as peças, o aparelho continua
+bootando e os jogos abrem — cada um no layout daquele aparelho, sem erro em
+lugar nenhum. A junção lê `/usr/bin/giochi-gamepad`, `/etc/init.d/S52gamepad`,
+`/etc/giochi/gamecontrollerdb.txt` e `/etc/giochi/buttons.map` de dentro da
+imagem (a mesma partição extraída do cartão), confere o bit de execução e a
+calibração dos eixos do mapa, e publica o resultado em `input.virtualGamepad`.
+O contrato de entrada está em
+[docs/juncao.md](docs/juncao.md#contrato-de-entrada--o-que-um-app-pode-esperar-do-aparelho).
+
 ## O que não entra na imagem
 
 | Distribuição | Destino | Por quê |
@@ -168,9 +178,10 @@ Giochi os/
 
 ## Estado
 
-O que está **verificado**: 69 testes passando — junção, verificação de checksum,
+O que está **verificado**: 126 testes passando — junção, verificação de checksum,
 regra de licença, geração do site com links corretos, publicação de alvo virtual
-(disco + kernel), compressão e leitura do `index.json` de dentro do `rootfs.ext4`.
+(disco + kernel), compressão, leitura do `index.json` de dentro do `rootfs.ext4`
+e verificação do controle virtual na imagem.
 
 O que **não** está: nenhum build de hardware rodado a partir daqui. A montagem do
 cartão (`genimage`/`make-sd-image.sh`) é do Giochi System; este repositório só
