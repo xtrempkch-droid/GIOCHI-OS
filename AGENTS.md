@@ -61,10 +61,11 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
   Esse boot foi da imagem montada **nesta máquina** (Buildroot 2024.02), com o
   mesmo caminho de injeção do CI. A imagem do CI é Buildroot **2025.02** — não
   é o mesmo binário, e não foi bootada aqui.
-- **O anexo publicado foi conferido baixando do GitHub** (`v0.1.6`):
-  `sha256sum -c` do X55 confere contra o `powkiddy-x55-SHA256SUMS` publicado, a
-  imagem tem tabela de partição válida, `e2fsck -fn` status 0 e os 6 apps em
-  `/opt/giochi/apps/index.json`.
+- **O anexo publicado foi conferido baixando do GitHub** (`v0.1.4`, R35S):
+  `sha256sum -c r35s-SHA256SUMS` deu `OK`; o `.img.xz` descomprimido tem os 7
+  apps em `/opt/giochi/apps/index.json`, o controle virtual completo e o runtime
+  do PortMaster completo (§7.13, §7.14). A extração da partição é a mesma
+  função (`withCardRootfs`) que a fase `package` usa.
 - `sha256sum -c SHA256SUMS` confere nos dois `dist/<device>/`.
 - O recorte de `sparse-checkout` do CI foi conferido contra a árvore
   commitada dos dois repositórios externos: 66/66 e 39/39 arquivos, sem sobra.
@@ -323,35 +324,43 @@ O workflow depende de um run **verde** do GIOCHI-SYSTEM: sem artefato ele para
 no passo "Resolver o build do sistema". Se o `workflow_dispatch` for usado, o
 input `system_run_id` permite apontar um run específico em vez do último.
 
-### Estado da publicação (15/11/2026)
+### Estado da publicação (26/11/2026)
 
-`v0.1.10` é a release boa: publicada pelo `release.yml` sem intervenção, com
-três aparelhos (X55, R35S e QEMU) e a página em dez idiomas. Desde a `v0.1.8` o **robô commita a página** — o commit
-`site: página de download da <versão>` é do `github-actions[bot]` no `main`.
-
-Desde a `v0.1.6` os anexos têm nome por aparelho:
+A **`v0.1.4`** é a release boa: publicada pelo `release.yml` sem intervenção, com
+**quatro** aparelhos (X55, X35H, R35S e QEMU) e a página em dez idiomas. O robô
+commitou a página (`2877812`, `site: página de download da 0.1.4`) no `main`.
 
 | Anexo | O que é |
 | --- | --- |
-| `giochi-powkiddy-x55-0.1.10.img.xz` | cartão SD do X55, 46 MB, 2 GiB descomprimido |
-| `giochi-r35s-0.1.10.img.xz` | cartão SD do R35S, 43 MB, 7 apps |
-| `giochi-qemu-aarch64-0.1.10.img.xz` | disco da VM, 15 MB |
-| `giochi-qemu-aarch64-0.1.10-Image.xz` | kernel da VM, 3,7 MB |
+| `giochi-powkiddy-x55-0.1.4.img.xz` | cartão SD do X55, 64 MB |
+| `giochi-powkiddy-x35h-0.1.4.img.xz` | cartão SD do X35H, 61 MB |
+| `giochi-r35s-0.1.4.img.xz` | cartão SD do R35S, 59 MB |
+| `giochi-qemu-aarch64-0.1.4.img.xz` | disco da VM, 17 MB |
+| `giochi-qemu-aarch64-0.1.4-Image.xz` | kernel da VM, 4,0 MB |
 | `<aparelho>-SHA256SUMS` | checksum daquele aparelho |
 | `<aparelho>-README.txt` | instruções daquele aparelho |
+| `<aparelho>-release.json` | o manifesto daquele aparelho |
 
-Conferido baixando do GitHub com o `curl`: o `sha256sum -c` do X55 confere, a
-imagem tem tabela de partição válida, `e2fsck -fn` limpo e os 6 apps em
-`/opt/giochi/apps/index.json`. Na página publicada, os sete links de download
-respondem 200.
+Conferido **baixando do GitHub**, não no build local: `sha256sum -c
+r35s-SHA256SUMS` deu `OK`, e o `.img.xz` descomprimido tem os **7 apps** em
+`/opt/giochi/apps/index.json`, o controle virtual completo (`daemon`, `servico`,
+`mapeamento`, `mapa` com os 4 eixos calibrados) e o runtime do PortMaster
+completo (`python3`, `bwrap`, `giochi-ports`, `/roms` → `/user`,
+`OS_NAME="Giochi"`). O site em `https://xtrempkch-droid.github.io/GIOCHI-OS/`
+responde 200 e aponta os 13 anexos da `v0.1.4`.
 
-As releases `v0.1.1`, `v0.1.2` e `v0.1.7` estão incompletas — anteriores às
-correções de §7.7 e §7.9. A `v0.1.7`, em particular, publicou os arquivos e
-falhou ao gerar a página. Use a `v0.1.10` ou mais nova.
+O `v0.1.4` foi o primeiro release em que o build do sistema saiu com o runtime do
+PortMaster nos handhelds (§7.14) e a primeira vez que a junção publicou
+`input.virtualGamepad` e `input.portmaster` com veredito — no QEMU os dois saem
+`expected: false` / `runtime: false`, sem aviso, que é o estado correto.
+
+As releases `v0.1.1`, `v0.1.2` e `v0.1.3` estão incompletas — anteriores às
+correções de §7.7 e §7.9 e à verificação de §7.13/§7.14. Use a `v0.1.4` ou mais
+nova.
 
 **O site está no ar.** `https://xtrempkch-droid.github.io/GIOCHI-OS/` serve o
-`index.html` da raiz — conferido com `curl`: 200 e os sete links de download da
-versão publicada respondendo 200.
+`index.html` da raiz — conferido com `curl`: 200 e os 13 links de download da
+versão publicada.
 
 Isso funcionou porque o Pages deste repositório está em **"Deploy from a
 branch"**: ele publica o repositório, e o `index.html` da raiz é a página. A
