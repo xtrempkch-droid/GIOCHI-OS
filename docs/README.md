@@ -4,6 +4,7 @@
   contrato de entrada do controle virtual (`Giochi Gamepad`) e o que cada fase
   verifica.
 - [Site](site.md) — como o site é gerado, por que sem `fetch`, e como publicar.
+- [Regras](regras.md) — as regras de engenharia adotadas, e o que elas mudam na junção.
 
 ## Princípio
 

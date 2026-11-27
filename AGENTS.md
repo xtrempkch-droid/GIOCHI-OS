@@ -44,7 +44,7 @@ Repositório no GitHub: `https://github.com/xtrempkch-droid/GIOCHI-OS`.
 - 133 testes em `tests/pipeline.test.mjs`.
 - Workflows: `validate.yml` (testes) e `release.yml` (`discover` → `package`
   matriz → `publish` → `deploy`).
-- Documentação em `docs/` (3 páginas).
+- Documentação em `docs/` (4 páginas, incluindo `regras.md`).
 
 ### Validado nesta sessão
 
@@ -118,7 +118,8 @@ Giochi os/
 └── docs/
     ├── README.md
     ├── juncao.md
-    └── site.md
+    ├── site.md
+    └── regras.md
 ```
 
 **CLI fino, lib testável.** `assemble.mjs` e `build-site.mjs` só leem argumentos
@@ -329,6 +330,9 @@ input `system_run_id` permite apontar um run específico em vez do último.
 A **`v0.1.4`** é a release boa: publicada pelo `release.yml` sem intervenção, com
 **quatro** aparelhos (X55, X35H, R35S e QEMU) e a página em dez idiomas. O robô
 commitou a página (`2877812`, `site: página de download da 0.1.4`) no `main`.
+
+A imagem veio do build `37e08b1` (run `45905065339` do GIOCHI-SYSTEM, Buildroot
+2025.02) — é esse commit que os números abaixo medem.
 
 | Anexo | O que é |
 | --- | --- |
@@ -825,3 +829,23 @@ sistema.
 Medido nas imagens locais desta máquina (15/11, anteriores ao PortMaster):
 `inspectPortmaster` devolve `runtime: false` nos dois aparelhos, sem aviso — que
 é exatamente o estado daquelas imagens. 133 testes.
+
+## 7.15 Decisões (26/11/2026, as regras de engenharia adotadas)
+
+A issue #6 pediu que este repositório adotasse as regras de engenharia do Giochi
+(`GIOCHI-SYSTEM/docs/regras-para-outras-equipes.md`, commit `7eef035`). Adotadas
+em `docs/regras.md`, que aponta para o texto base em vez de copiá-lo — cópia
+envelhece separada da fonte.
+
+- **O que já estava aplicado, com medição.** R3 (perguntar pela consequência)
+  virou `apps.imageVerified`, `input.virtualGamepad` e `input.portmaster`, todos
+  lidos do ext4 publicado; R8 (licença antes de recurso) já recusava GPL na fase
+  `apps` e agora também barra o pacote do PortMaster da imagem; R12 (estado que
+  sobra) é a fase `apps` recriando a saída e a injeção apagando antes de
+  escrever; R9 (não confie no relatório) é a conferência da `v0.1.4` feita
+  baixando o anexo.
+- **O que a junção continua não podendo provar** está escrito lá e em
+  `docs/juncao.md`: config do kernel (`CONFIG_INPUT_UINPUT`, `CONFIG_USER_NS`), o
+  evento chegando no daemon e o port rodando. `SKIP` justificado, não silêncio.
+- **Citar o commit do build** em todo relatório de medição: §11 passou a trazer o
+  commit da imagem (`37e08b1`, run `45905065339`) junto dos números da `v0.1.4`.
